@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import tifffile as tiff
 from scipy import ndimage as ndi
 from skimage.color import label2rgb
 from scipy.spatial.distance import directed_hausdorff
@@ -53,7 +54,8 @@ def model_predict_and_process(model, image):
     """
     with torch.no_grad():
         mask = model(image)
-        one_hot = F.one_hot(mask.argmax(dim=1), 2).permute(0, 3, 1, 2).float()
+        num_classes = mask.shape[1] # Updated to fit multiclass segmentation 
+        one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
         ordered_mask = one_hot.numpy().squeeze()
     return mask, ordered_mask
 
@@ -99,6 +101,9 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
     if len(segmentation_map.shape) == 3:
         segmentation_map = segmentation_map.argmax(axis=0)
 
+    raw_mask_path = os.path.join(output_folder, model_name, f'{image_name}_raw_mask.tif')
+    tiff.imwrite(raw_mask_path, segmentation_map.astype(np.uint8))
+    
     rgba_array = np.ones((segmentation_map.shape[0], segmentation_map.shape[1], 4), dtype=np.uint8)*255
 
     # negative pixels should have no alpha and no colour
@@ -287,7 +292,8 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         all_model_outputs = []
         display_dice_scores = []
 
-        gt_one_hot = F.one_hot(gt_mask.long(), 2).permute(0, 3, 1, 2).float()
+        num_classes = 3
+        gt_one_hot = F.one_hot(gt_mask.long(), num_classes).permute(0, 3, 1, 2).float()
 
         for model, mname in zip(models, model_names):
 
