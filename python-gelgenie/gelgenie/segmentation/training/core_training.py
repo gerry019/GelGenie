@@ -17,7 +17,17 @@ import importlib
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import sys # Needed for the debug prints
 import toml
+
+try:
+    # Import required as this does not come with torch being imported like cuda
+    import torch_xla.core.xla_model as xm
+    import torch_xla
+    from torch_xla.amp import autocast
+    XLA_AVAILABLE = True
+except ImportError:
+    XLA_AVAILABLE = False
 
 from tqdm import tqdm
 import os
@@ -68,25 +78,55 @@ class TrainingHandler:
                 self.main_folder = join(base_dir, '%s_%d' % (experiment_name, next_id))
                 next_id += 1
             rprint('[bold red]Original folder name was already taken, so the id %d'
-                   ' was appended to the current experiment name.[/ bold red]' % (next_id-1))
+                   ' was appended to the current experiment name.[/bold red]' % (next_id-1))
 
         self.checkpoints_folder = join(self.main_folder, 'checkpoints')
         self.example_output_folder = join(self.main_folder, 'segmentation_samples')
         self.logs_folder = join(self.main_folder, 'training_logs')
 
-        self.device = torch.device('cuda' if processing_parameters['device'].lower() == 'gpu' else 'cpu')
+
+        # For whichever gets chosen and is available, choosing cpu as a last resort
+        if processing_parameters['device'].lower() == "tpu":
+            if XLA_AVAILABLE:
+                self.device = torch_xla.device()
+                self.is_tpu = True
+            elif torch.cuda.is_available():
+                rprint("[bold yellow]TPU not available, using GPU instead.[/bold yellow]")
+                self.device = torch.device("cuda")
+                self.is_tpu = False
+            else:
+                rprint("[bold red]TPU not available, falling back to CPU.[/bold red]")
+                self.device = torch.device("cpu")
+                self.is_tpu = False
+
+        elif processing_parameters['device'].lower() == "gpu":
+            if torch.cuda.is_available():
+                    self.device = torch.device("cuda")
+                    self.is_tpu = False
+            elif XLA_AVAILABLE:
+                rprint("[bold yellow]GPU not available, using TPU instead.[/bold yellow]")
+                self.device = torch_xla.device()
+                self.is_tpu = True
+            else:
+                rprint("[bold red]GPU not available, falling back to CPU.[/bold red]")
+                self.device = torch.device("cpu")
+                self.is_tpu = False
+        else:
+            self.device = torch.device("cpu")
+            self.is_tpu = False
+
 
         self.wandb_track = training_parameters['wandb_track']
         self.resumed_model = True if training_parameters['load_checkpoint'] else False
 
         # Initialise wandb logging
         if self.wandb_track and wandb_available:
-            if processing_parameters['base_hardware'] == 'EDDIE':
-                self.wandb_package = wandb.init(project='GelGenie Final Phase', entity='dunn-group', resume='allow',
+            if processing_parameters['base_hardware'] == 'LOCAL': # Updated to my own wandb
+                self.wandb_package = wandb.init(project='Wells', entity='gertrude-university-of-malta', resume='allow',
                                                 name=os.path.basename(self.main_folder), id=unique_id,
                                                 settings=wandb.Settings(start_method="fork"))
             else:
-                self.wandb_package = wandb.init(project='GelGenie Final Phase', entity='dunn-group',
+                self.wandb_package = wandb.init(project='Wells', entity='gertrude-university-of-malta',
                                                 name=os.path.basename(self.main_folder), id=unique_id,
                                                 resume='allow')
         elif self.wandb_track:
@@ -112,8 +152,16 @@ class TrainingHandler:
         self.checkpoint_save_frequency = training_parameters['checkpoint_frequency']
         self.model_cleanup_frequency = training_parameters['model_cleanup_frequency']
         self.model_cleanup_metric = training_parameters['model_cleanup_metric']
-        self.grad_scaler = torch.cuda.amp.GradScaler(enabled=training_parameters['grad_scaler'])  # CUDA only function
-        self.use_amp_scaler = training_parameters['grad_scaler']
+        if self.is_tpu:
+            # TPU does not require need gradient scaling in the same way (uses bfloat16)
+            self.grad_scaler = None
+            self.use_amp_scaler = False
+        elif self.device.type == "cuda":
+            self.grad_scaler = torch.cuda.amp.GradScaler(enabled=training_parameters['grad_scaler']) #CUDA only function
+            self.use_amp_scaler = training_parameters['grad_scaler']
+        else:  # CPU
+            self.grad_scaler = None  # CPU does not need gradient scaling
+            self.use_amp_scaler = False
 
         # model loading
         if training_parameters['load_checkpoint']:
@@ -205,7 +253,12 @@ class TrainingHandler:
         if self.scheduler:
             full_state_dict['scheduler'] = self.scheduler.state_dict()
         full_state_dict['epoch'] = self.current_epoch
-        torch.save(full_state_dict, join(self.checkpoints_folder, name))
+
+        if self.is_tpu: # to save
+            xm.save(full_state_dict, join(self.checkpoints_folder, name))
+        else:
+            torch.save(full_state_dict, join(self.checkpoints_folder, name))
+
         rprint(f'[bold orange]Model, optimizer and scheduler weights saved to {name}.[/bold orange]')
 
     def loss_calculation(self, masks_pred, true_masks, epoch_metrics):
@@ -260,15 +313,43 @@ class TrainingHandler:
                 images = images.to(device=self.device)
                 true_masks = true_masks.to(device=self.device, dtype=torch.long)
 
-                # Use autocast if amp is used
-                with torch.cuda.amp.autocast(enabled=self.use_amp_scaler):
+                if self.is_tpu:
+                    # TPU path (bfloat16 autocast)
+                    with autocast(self.device):
+                        masks_pred = self.net(images)
+                        loss = self.loss_calculation(masks_pred, true_masks, epoch_metrics)
+
+                elif self.device.type == "cuda":
+                    # GPU path (float16 autocast, only if enabled)
+                    with torch.cuda.amp.autocast(enabled=self.use_amp_scaler):
+                        masks_pred = self.net(images)
+                        loss = self.loss_calculation(masks_pred, true_masks, epoch_metrics)
+
+                else:
+                    # CPU path (no autocast support, so just run normally)
                     masks_pred = self.net(images)
                     loss = self.loss_calculation(masks_pred, true_masks, epoch_metrics)
 
-                self.optimizer.zero_grad()
-                self.grad_scaler.scale(loss).backward()
-                self.grad_scaler.step(self.optimizer)
-                self.grad_scaler.update()
+
+                self.optimizer.zero_grad() # To ensure gradients do not pile over batches
+
+                if self.is_tpu:
+                    # TPU: no GradScaler needed and synch for proper execution
+                    loss.backward()
+                    self.optimizer.step()
+                    torch_xla.sync()
+
+
+                elif self.grad_scaler is not None:
+                    # GPU with AMP
+                    self.grad_scaler.scale(loss).backward()
+                    self.grad_scaler.step(self.optimizer)
+                    self.grad_scaler.update()
+
+                else:
+                    # CPU (or GPU with AMP disabled)
+                    loss.backward()
+                    self.optimizer.step()
 
                 pbar.update(1)
                 pbar.set_postfix(**{'loss (batch)': loss.item()})
@@ -285,30 +366,56 @@ class TrainingHandler:
         :param epoch: Current epoch number (for logging purposes)
         :return: All validation metrics for this epoch
         """
-
+        # To flush the buffer and output without delay
+        rprint(f"[yellow]DEBUG: Entered eval_epoch for epoch {epoch}[/yellow]"); sys.stdout.flush()
         epoch_metrics = defaultdict(float)
         self.net.eval()
+
+        seg_sample_package = {}   # Added in case no validation samples
 
         # iterate over the validation set
         with tqdm(total=len(self.val_loader), desc=f'Epoch {epoch}/{self.max_epochs} validation', unit='batch',
                   leave=False) as pbar:
             for b_index, batch in enumerate(self.val_loader):
-                image, mask_true = batch['image'], batch['mask']
 
+                # To see that it started properly
+                debug_this = b_index < 3  # only debug first 3 batches
+
+
+                if debug_this:
+                    rprint(f"[cyan]DEBUG: Processing batch {b_index}[/cyan]"); sys.stdout.flush()
+
+                image, mask_true = batch['image'], batch['mask']
                 # move images and labels to device, set the type of pixel values
                 image = image.to(device=self.device, dtype=torch.float32)
                 mask_true = mask_true.to(device=self.device, dtype=torch.long)
 
-                # one_hot format has only a single 1 bit and the rest are 0 bits
+                mask_true_for_loss = mask_true.clone() # Store original for loss calculation
+
+                 # one_hot format has only a single 1 bit and the rest are 0 bits
                 # i.e. if n_classes is 3 will transform [0] to [1,0,0], [1] to [0,1,0], [2] to [0,0,1]
                 # The permute() function changes it from [N, H, W, C] to [N, C, H, W]
                 mask_true = F.one_hot(mask_true, self.net.n_classes).permute(0, 3, 1, 2).float()
 
                 with torch.no_grad():
+                    if debug_this:
+                        rprint(f"[yellow]DEBUG: About to run forward pass on batch {b_index}[/yellow]"); sys.stdout.flush()
+
                     # predict the mask
                     mask_pred = self.net(image)
 
-                    # convert to one-hot format if 3 channels, else apply sigmoid function
+                    if self.is_tpu:
+                        # Matches the training and executes the graph with debugging
+                        torch_xla.sync()
+                        if debug_this:
+                            rprint(f"[green]DEBUG: Forward pass + TPU sync completed[/green]"); sys.stdout.flush()
+
+                    # Calcualte the validation loss
+                    temp_metrics = defaultdict(float) # Temporary dict - won't affect anything
+                    val_loss = self.loss_calculation(mask_pred, mask_true_for_loss, temp_metrics)
+                    epoch_metrics['Validation Loss'] += val_loss.detach().cpu().numpy()
+
+                    # Convert to one-hot format if 3 channels, else apply sigmoid function
                     # Calculate dice score
                     if self.net.n_classes == 1:
                         raise RuntimeError('Dice score not implemented for single class segmentation.')
@@ -318,23 +425,41 @@ class TrainingHandler:
                         current_score = multiclass_dice_coeff(mask_pred[:, 1:, ...],
                                                               mask_true[:, 1:, ...],
                                                               reduce_batch_first=False).cpu().numpy()
+                         # Updated the score before the output for better debugging
+                        epoch_metrics['Dice Score'] += current_score
+
+                    if debug_this:
+                        # Convert tensor into float
+                        rprint(f"[green]DEBUG: Loss {val_loss.item():.4f}, Dice {current_score:.4f}[/green]"); sys.stdout.flush()
+
                 pbar.update(1)
                 pbar.set_postfix(**{'Dice score (batch)': current_score})
-                epoch_metrics['Dice Score'] += current_score
-                if b_index < 3:  # prepares sample outputs
-                    image_array, threshold_mask_array, combi_mask_array, mask_true_array = \
-                        visualise_segmentation(image.squeeze(), mask_pred.squeeze(),
-                                               mask_true.squeeze(),
-                                               epoch, dice_score=current_score,
-                                               optional_name=batch['image_name'][0],
-                                               segmentation_path=self.example_output_folder)
-                    if b_index == 0:  # only one sample sent to wandb
-                        seg_sample_package = {'image': image_array, 'threshold_mask': threshold_mask_array,
-                                              'combi_mask': combi_mask_array, 'mask_true': mask_true_array}
 
-        for key, val in epoch_metrics.items():  # averaging results across the full epoch
+                # Visualisation + sample package
+                if b_index < 3: # prepares sample outputs
+                    if debug_this:
+                        rprint(f"[yellow]DEBUG: Preparing visualisation for batch {b_index}[/yellow]"); sys.stdout.flush()
+                    # Added the try/except block to see if visualisation ever fails because of some error, I would know where
+                    try:
+                        image_array, threshold_mask_array, combi_mask_array, mask_true_array = \
+                            visualise_segmentation(image.squeeze(), mask_pred.squeeze(),
+                                                mask_true.squeeze(),
+                                                epoch, dice_score=current_score,
+                                                optional_name=batch['image_name'][0],
+                                                segmentation_path=self.example_output_folder)
+                        if b_index == 0: # only one sample sent to wandb
+                            seg_sample_package = {'image': image_array, 'threshold_mask': threshold_mask_array, 'combi_mask': combi_mask_array, 'mask_true': mask_true_array}
+                            if debug_this:
+                                rprint("[green]DEBUG: seg_sample_package prepared[/green]"); sys.stdout.flush()
+                    except Exception as viz_error:
+                        rprint(f"[red]DEBUG: Visualisation failed for batch {b_index}: {viz_error}[/red]"); sys.stdout.flush()
+    
+        # Average metrics across epoch
+        for key, val in epoch_metrics.items():
             epoch_metrics[key] = val / len(self.val_loader)
+            rprint(f"[blue]DEBUG: Final {key}: {epoch_metrics[key]:.6f}[/blue]"); sys.stdout.flush()
 
+        rprint("[green]DEBUG: eval_epoch completed successfully[/green]"); sys.stdout.flush()
         return epoch_metrics, seg_sample_package
 
     def full_training(self):
@@ -343,12 +468,17 @@ class TrainingHandler:
         :return: None
         """
 
+        # Always start fresh for a metric dictionary when resuming to avoid CSV corruption issues
+        total_metrics = defaultdict(list)
         if self.resumed_model:
-            old_metrics = load_statistics(self.logs_folder, 'training_stats.csv', config='pd')
-            total_metrics = defaultdict(list, old_metrics.to_dict(orient='list'))
-        else:
-            total_metrics = defaultdict(list)
+          rprint(f'[bold orange]Resuming from checkpoint - creating fresh statistics file[/bold orange]')
 
+        # The file name, moved here from inside training loop
+        stats_filename = "training_stats.csv"
+        if self.resumed_model:
+        # Year,month, day, hour, minute and seconds
+          timestamp = strftime("%Y%m%d_%H%M%S")  # Add timestamp for uniqueness- to allow multiple runs from same epoch if needed
+          stats_filename = f"training_stats_resumed_from_{self.current_epoch - 1}_{timestamp}.csv"
         # Begin training
         for epoch in range(self.current_epoch, self.max_epochs + 1):
 
@@ -374,42 +504,83 @@ class TrainingHandler:
             if self.val_loader is None:
                 stat_plotting = [['Training Loss'], ['Learning Rate']]
             else:
-                stat_plotting = [['Training Loss', 'Dice Score'], ['Learning Rate']]
+                stat_plotting = [['Training Loss','Validation Loss', 'Dice Score'], ['Learning Rate']]
             if 'Dice Loss' in current_epoch_metrics and 'Cross-Entropy Loss' in current_epoch_metrics:
                 stat_plotting += [['Dice Loss', 'Cross-Entropy Loss']]
 
-            # plot training metrics
-            plot_stats(total_metrics, stat_plotting, self.logs_folder, 'metric_plots.pdf')
+            epoch_count = len(total_metrics['Epoch']) # Gets how many epochs were logged so far
+            for metric_name in total_metrics:
+            # If this metric has fewer entries than the total number of epochs
+              if len(total_metrics[metric_name]) < epoch_count:
+                   # Work out how many entries are missing and pad with NaN values for missing epochs
+                  missing_count = epoch_count - len(total_metrics[metric_name])
+                  total_metrics[metric_name] = [float('nan')] * missing_count + total_metrics[metric_name]
+
+            #  Create the filename for the plot PDF, based on the stats filename
+            plot_filename = stats_filename.replace("training_stats", "metric_plots").replace(".csv", ".pdf")
+            # Construct the full path to the CSV stats file inside the logs folder.
+            stats_path = os.path.join(self.logs_folder, stats_filename)
+
+            # Checks if paths exists
+            if os.path.exists(stats_path):
+                # When stats file is already there reload the existing stats from disk so plots can include past epochs
+                # Returns a panda frame
+                all_metrics = load_statistics(self.logs_folder, stats_filename, config="pd")
+                # Convert the data frame to a dict of lists, generate and save pdf
+                plot_stats(all_metrics.to_dict(orient="list"), stat_plotting, self.logs_folder, plot_filename)
+            else:
+                # If it doesnt exist plot directly from memory
+                # Safety check to ensure first epoch is appended to the pdf
+                plot_stats(total_metrics, stat_plotting, self.logs_folder, plot_filename)
+
+
+            # Use different filename when resuming to avoid old file issues
+            #stats_filename = "training_stats.csv"
+            #if self.resumed_model:
+              #stats_filename = f"training_stats_resumed_from_{self.current_epoch - 1}.csv"
+            # Use row position instead of epoch number when saving stats
+            data_length = len(total_metrics['Epoch']) # rows in memory (avoids the issue of seeing the rows before)
+            selected_data = data_length - 1 if data_length > 1 else None # Index of the newest row
 
             # save results to file
-            save_statistics(experiment_log_dir=self.logs_folder, filename='training_stats.csv',
+            save_statistics(experiment_log_dir=self.logs_folder, filename=stats_filename,
                             stats_dict=total_metrics,
-                            selected_data=epoch - 1 if epoch > 1 else None,
+                            selected_data=selected_data, 
                             append=True if epoch > 1 else False)
 
             if self.wandb_track:
-                if self.val_loader is None:
-                    self.wandb_package.log({
-                        'Learning rate': current_epoch_metrics['Learning Rate'],
-                        'Train loss': current_epoch_metrics['Training Loss'],
-                        'epoch': epoch,
-                    })
-                else:
-                    # log eval sample to wandb, if available
-                    self.wandb_package.log({
-                        'Learning rate': current_epoch_metrics['Learning Rate'],
-                        'Validation Dice': current_epoch_metrics['Dice Score'],
-                        'Train loss': current_epoch_metrics['Training Loss'],
-                        'Validation sample': {
-                            'Input': wandb.Image(seg_sample_package['image']),
-                            'Segmentation': {
-                                'True': wandb.Image(seg_sample_package['mask_true']),
-                                'Predicted': wandb.Image(seg_sample_package['threshold_mask']),
-                                'Predicted-superimposed': wandb.Image(seg_sample_package['combi_mask']),
+                log_dict = {
+                    "epoch": epoch,
+                    "Learning Rate": current_epoch_metrics["Learning Rate"],
+                    "Train Loss": current_epoch_metrics["Training Loss"],
+                }
+
+                if self.val_loader is not None:
+                    # Convert class indices to proper format for WandB (0–2 → 0–254 grayscale)
+                    pred_img = (seg_sample_package['threshold_mask'] * 127).astype(np.uint8)
+                    true_img = (seg_sample_package['mask_true'] * 127).astype(np.uint8)
+
+                    log_dict.update({
+                        "Validation Dice": current_epoch_metrics["Dice Score"],
+                        "Validation Loss": current_epoch_metrics["Validation Loss"],
+                        "Validation Sample": {
+                            "Input": wandb.Image(seg_sample_package["image"]),
+                            "Segmentation": {
+                                "True": wandb.Image(true_img),
+                                "Predicted": wandb.Image(pred_img),
+                                "Predicted-superimposed": wandb.Image(seg_sample_package["combi_mask"]),
                             },
                         },
-                        'epoch': epoch,
                     })
+
+                # add optional metrics only if present
+                for optional_metric in ["Dice Loss", "Cross-Entropy Loss"]:
+                    if optional_metric in current_epoch_metrics:
+                        log_dict[optional_metric] = current_epoch_metrics[optional_metric]
+
+                # Handle the dict
+                self.wandb_package.log(log_dict)
+
 
             if self.checkpoint_saving and (epoch == self.max_epochs or epoch % self.checkpoint_save_frequency == 0):
                 self.save_checkpoint('checkpoint_epoch_%s.pth' % epoch)
