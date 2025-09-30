@@ -247,7 +247,7 @@ class ImageMaskDataset(ImageDataset):
     def extract_full_dataset_metrics(self):
         max_dimension = 0
         # loops through provided images and extracts the largest image dimension for use if padding is selected
-        class_counts = np.zeros((1, 2), dtype=int)
+        class_counts = np.zeros((1, 3), dtype=int)
         for file in self.mask_names:  # TODO: should this be changed to rectangular rather than square images?
             image = imageio.v2.imread(file)  # TODO: does this need updating?
             max_dimension = max(max_dimension, image.shape[0], image.shape[1])
@@ -256,13 +256,13 @@ class ImageMaskDataset(ImageDataset):
 
         max_dimension = 32 * (max_dimension // 32 + 1)  # to be divisible by 32 as required by smp-UNet/ UNet++
 
-        class_weighting = np.sum(class_counts) / (2 * class_counts)  # calculates class weighting
+        class_weighting = np.sum(class_counts) / (3 * class_counts)  # calculates class weighting
 
         if self.padding:
             rprint(f'[bold blue]Padding images to {max_dimension}x{max_dimension}[/bold blue]')
 
         rprint(f'[bold blue]Class weighting is {class_weighting[:, 0]} for background, '
-               f'{class_weighting[:, 1]} for bands[/bold blue]')
+               f'{class_weighting[:, 1]} for bands, {class_weighting[:, 2]} for wells[/bold blue]')
 
         return {'Max Dimension': max_dimension, 'Class Weighting': class_weighting}
 
@@ -272,7 +272,7 @@ class ImageMaskDataset(ImageDataset):
         # masks are specially prepared for easy reading, so there shouldn't the need for any further processing.
         # However, I have left a check here to indicate if something changes in the input data.
         unique = np.unique(mask)  # Acquire unique pixel values of the mask
-        if not all(unique == [0, 1]):
+        if not all(unique == [0, 1, 2]):
             raise RuntimeError('Mask data does not match expected format.')
 
         # Previous processing:
