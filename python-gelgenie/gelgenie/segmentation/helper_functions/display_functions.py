@@ -16,6 +16,7 @@
 
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.colors import ListedColormap
 import os
 
 
@@ -32,9 +33,10 @@ def plot_img_and_mask(img, mask):
     if classes > 1:
         for i in range(classes):
             ax[i + 1].set_title(f'Output mask (class {i + 1})')
-            ax[i + 1].imshow(mask[1, :, :])
+            # Show each class channel
+            ax[i + 1].imshow(mask[i, :, :])
     else:
-        ax[1].set_title(f'Output mask')
+        ax[1].set_title('Output mask')
         ax[1].imshow(mask)
     plt.xticks([]), plt.yticks([])
     plt.show()
@@ -71,14 +73,18 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
     """
     Prepares a matplotlib plot comparing a segmentation prediction with the true mask.
     :param image: image tensor
-    :param mask_pred: mask prediction tensor
-    :param mask_true: true mask tensor
+    :param mask_pred: mask prediction tensor (expected one-hot [C,H,W], C=3)
+    :param mask_true: true mask tensor (expected one-hot [C,H,W], C=3)
     :param epoch_number: current epoch number
     :param dice_score: dice score for current epoch
     :param segmentation_path: directory path for output of segmentation images
     :param optional_name: Optional name to append to output file
     :return: Numpy arrays of image, mask prediction, super-imposed mask and true mask
     """
+    # Custom colormap: black, red, green
+    colors = ['black', 'red', 'green']
+    custom_cmap = ListedColormap(colors)
+    
     n_channels = 1 if len(image.shape) == 2 else 3
     if n_channels == 1:
         height = image.size(dim=0)
@@ -89,21 +95,25 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
         width = image.size(dim=2)
         image_array = np.transpose(image.detach().squeeze().cpu().numpy(), (1, 2, 0))  # tensor [C,H,W] to array [H,W,C]
 
-    mask_pred_array_multichannel = mask_pred.detach().squeeze().cpu().numpy()  # Copies prediction into np array [C, H, W]
-    mask_true_array = mask_true.detach().squeeze().cpu().numpy()[1]  # Copies true mask[1] into np array [H,W]
+    # --- Convert predicted/true masks to NumPy (multi-channel) ---
+    mask_pred_array_multichannel = mask_pred.detach().squeeze().cpu().numpy()   # [C,H,W]
+    mask_true_array_multichannel = mask_true.detach().squeeze().cpu().numpy()   # [C,H,W]
 
-    mask_pred_array = np.zeros((height, width))
-    for channel in range(1, mask_pred_array_multichannel.shape[0]):  # background class skipped (to set as 0)
-        mask_pred_array += mask_pred_array_multichannel[channel]
+    # --- Build class-index maps (0=bg, 1=bands, 2=wells) ---
+    mask_pred_array = np.argmax(mask_pred_array_multichannel, axis=0).astype(np.uint8)  # [H,W]
+    mask_true_array = np.argmax(mask_true_array_multichannel, axis=0).astype(np.uint8)  # [H,W]
 
+    # --- Superimposed RGB (red=bands, green=wells, else original image) ---
     combi_mask_array = np.zeros((height, width, 3))  # np array [H, W, C]
     for i in range(height):
         for j in range(width):
-            if mask_pred_array[i][j] == 1:  # It is classified as gel band
-                combi_mask_array[i][j] = [1, 0, 0]  # Set the pixel to have red colour
+            if mask_pred_array[i][j] == 1:  # class 1: bands
+                combi_mask_array[i][j] = [1, 0, 0]  # red
+            elif mask_pred_array[i][j] == 2:  # class 2: wells
+                combi_mask_array[i][j] = [0, 1, 0]  # green
             else:  # Background
                 if n_channels == 1:  # image_array [H,W] / grayscale
-                    combi_mask_array[i][j] = np.repeat(image_array[i][j], 3)  # Copies grayscale value to RGB channels
+                    combi_mask_array[i][j] = np.repeat(image_array[i][j], 3)  ## Copies grayscale value to RGB channels
                 elif n_channels == 3:  # image_array [H,W,C] / RGB
                     combi_mask_array[i][j] = image_array[i][j]  # Copies RGB channel values all at once
 
@@ -114,13 +124,15 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
     else:
         axs[0].imshow(image_array)
 
-    axs[1].imshow(mask_pred_array, cmap='gray')
+    # Show class-index predictions with custom colormap (black, red, green)
+    axs[1].imshow(mask_pred_array, cmap=custom_cmap, vmin=0, vmax=2)
     axs[1].set_title('Mask Prediction')
 
     axs[2].imshow(combi_mask_array)
     axs[2].set_title('Superimposed\nMask Prediction')
 
-    axs[3].imshow(mask_true_array, cmap='gray')
+    # Show class-index ground truth with same custom colormap
+    axs[3].imshow(mask_true_array, cmap=custom_cmap, vmin=0, vmax=2)
     axs[3].set_title('True Mask')
 
     plt.setp(plt.gcf().get_axes(), xticks=[], yticks=[])  # remove ticks
