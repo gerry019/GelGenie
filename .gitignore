@@ -154,3 +154,5 @@ qupath-extension-djl/
 qupath-extension-djl-latest/
 Qupath-extension-instanseg/
 nnUNet/
+python-gelgenie/wandb/
+python-gelgenie/=*
