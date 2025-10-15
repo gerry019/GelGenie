@@ -18,6 +18,7 @@ from gelgenie.classical_tools.watershed_segmentation import watershed_analysis, 
 from gelgenie.segmentation.data_handling.dataloaders import ImageDataset, ImageMaskDataset
 from gelgenie.segmentation.helper_functions.general_functions import create_dir_if_empty, index_converter
 from gelgenie.segmentation.helper_functions.dice_score import multiclass_dice_coeff
+from gelgenie.segmentation.evaluation.gel_analysis import analyze_gel_with_proper_well_centric_approach
 
 import os
 from torch.utils.data import DataLoader
@@ -48,6 +49,7 @@ ref_data_folder = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pa
 def model_predict_and_process(model, image):
     """
     Runs the provided segmentation model and pre-processes it into an ordered mask for subsequent labelling.
+    Computes a per-pixel confidence map (max softmax probability)
     :param model: Pytorch segmentation model
     :param image: Input image (torch tensor)
     :return:
@@ -55,9 +57,12 @@ def model_predict_and_process(model, image):
     with torch.no_grad():
         mask = model(image)
         num_classes = mask.shape[1] # Updated to fit multiclass segmentation 
+        probs = F.softmax(mask, dim=1) # Get softmax probability across the classes dimension
+        # Get the maximum value per pixel, no index 
+        conf_map = probs.max(dim=1)[0].squeeze().cpu().numpy() # Numpy conversion for saving
         one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
         ordered_mask = one_hot.numpy().squeeze()
-    return mask, ordered_mask
+    return mask, ordered_mask, conf_map
 
 
 def model_multi_augment_predict_and_process(model, image):
@@ -78,10 +83,13 @@ def model_multi_augment_predict_and_process(model, image):
             mask += torch.flip(model(torch.flip(image, axes)), axes)
         mask /= (len(axes_combinations) + 1)
 
-    one_hot = F.one_hot(mask.argmax(dim=1), 2).permute(0, 3, 1, 2).float()
+    num_classes = mask.shape[1]  # For 3 class segmentation
+    probs = F.softmax(mask, dim=1) # softmax with normalization for classes
+    conf_map = probs.max(dim=1)[0].squeeze().cpu().numpy() 
+    one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
     ordered_mask = one_hot.numpy().squeeze()
 
-    return mask, ordered_mask
+    return mask, ordered_mask, conf_map
 
 
 def save_model_output(output_folder, model_name, image_name, labelled_image):
@@ -96,13 +104,19 @@ def save_model_output(output_folder, model_name, image_name, labelled_image):
     imageio.v2.imwrite(os.path.join(output_folder, model_name, '%s.png' % image_name), (labelled_image * 255).astype(np.uint8))
 
 
-def save_segmentation_map(output_folder, model_name, image_name, segmentation_map, positive_pixel_colour=(163, 106, 13)):
+def save_segmentation_map(output_folder, model_name, image_name, segmentation_map, confidence_map=None, positive_pixel_colour=(163, 106, 13)):
 
     if len(segmentation_map.shape) == 3:
         segmentation_map = segmentation_map.argmax(axis=0)
 
+    # Saving the mask produced with classes (argmax)
     raw_mask_path = os.path.join(output_folder, model_name, f'{image_name}_raw_mask.tif')
     tiff.imwrite(raw_mask_path, segmentation_map.astype(np.uint8))
+
+    # Save confidence map if provided
+    if confidence_map is not None:
+        conf_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_map.tif')
+        tiff.imwrite(conf_path, confidence_map.astype(np.float32)) # For continous numbers
     
     rgba_array = np.ones((segmentation_map.shape[0], segmentation_map.shape[1], 4), dtype=np.uint8)*255
 
@@ -215,7 +229,8 @@ def read_nnunet_inference_from_file(nfile):
     # read image from file, convert to 1 channel segmentation format
     # pass on for dice score calculation and RGB labelling
     n_im = imageio.v2.imread(nfile)
-    torch_mask = F.one_hot(torch.tensor(n_im).long().unsqueeze(0), 2).permute(0, 3, 1, 2).float()
+    # Hardcoded for 3 class-segmentation
+    torch_mask = F.one_hot(torch.tensor(n_im).long().unsqueeze(0), 3).permute(0, 3, 1, 2).float()
 
     return torch_mask, n_im
 
@@ -261,6 +276,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
     create_dir_if_empty(os.path.join(output_folder, 'method_comparison'))
     create_dir_if_empty(os.path.join(output_folder, 'metrics'))
+  
 
 
     double_indexing = True  # axes will have two indices rather than one
@@ -296,6 +312,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         gt_one_hot = F.one_hot(gt_mask.long(), num_classes).permute(0, 3, 1, 2).float()
 
         for model, mname in zip(models, model_names):
+            confidence_map = None # Initialise
 
             # classical methods
             if mname == 'watershed':
@@ -306,13 +323,17 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                 torch_one_hot, mask = read_nnunet_inference_from_file(os.path.join(model, image_name + '.tif'))
             else:  # standard ML models
                 if multi_augment:
-                    torch_mask, mask = model_multi_augment_predict_and_process(model, batch['image'])
+                    torch_mask, mask, confidence_map = model_multi_augment_predict_and_process(model, batch['image'])
                 else:
-                    torch_mask, mask = model_predict_and_process(model, batch['image'])
-                torch_one_hot = F.one_hot(torch_mask.argmax(dim=1), 2).permute(0, 3, 1, 2).float()
+                    torch_mask, mask, confidence_map = model_predict_and_process(model, batch['image'])
+                num_classes = torch_mask.shape[1] # For multi-class segmentation
+                torch_one_hot = F.one_hot(torch_mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
 
                 torch_one_hot = torch_one_hot[:, :, pad_h1:-pad_h2, pad_w1:-pad_w2]  # unpads model outputs
                 mask = mask[:, pad_h1:-pad_h2, pad_w1:-pad_w2]
+                # Unpad confidence map
+                if confidence_map is not None:
+                    confidence_map = confidence_map[pad_h1:-pad_h2, pad_w1:-pad_w2]
 
             # dice score calculation
             dice_score = multiclass_dice_coeff(torch_one_hot[:, 1:, ...],
@@ -367,7 +388,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
             all_model_outputs.append(rgb_labels)
             save_model_output(output_folder, mname, image_name, rgb_labels)
-            save_segmentation_map(output_folder, mname, image_name, mask, positive_pixel_colour=map_pixel_colour)
+            save_segmentation_map(output_folder, mname, image_name, mask, confidence_map=confidence_map, positive_pixel_colour=map_pixel_colour)
 
         gt_labels, _ = ndi.label(gt_one_hot.numpy().squeeze().argmax(axis=0))
         gt_rgb_labels = label2rgb(gt_labels, image=np_image)
@@ -389,7 +410,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
 def segment_and_plot(models, model_names, input_folder, output_folder, minmax_norm=False, percentile_norm=False,
                      multi_augment=False, images_per_row=2, run_classical_techniques=False, nnunet_models_and_folders=None,
-                     map_pixel_colour=(163, 106, 13)):
+                     map_pixel_colour=(163, 106, 13), run_analysis=False, ladder_sizes_bp=None):
     """
     Segments images in input_folder using models and saves the output image and a quick comparison to the output folder.
     :param models: Pre-loaded pytorch segmentation models
@@ -403,6 +424,8 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
     :param run_classical_techniques: Set to true to also run watershed and multiotsu segmentation apart from selected models
     :param nnunet_models_and_folders: List of tuples containing (model name, folder location) for pre-computed nnunet results on the same dataset
     :param map_pixel_colour: Colour to use for positive pixels in the output segmentation map (tuple, RGB)
+    :param run_analysis: Set to true to run distance measurement analysis on segmentation masks
+    :param ladder_sizes_bp: Optional pre-specified ladder sizes (list of floats), otherwise prompts per image
     :return: N/A (all outputs saved to file)
     """
 
@@ -430,6 +453,11 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
 
     create_dir_if_empty(os.path.join(output_folder, 'method_comparison'))
 
+    # Track analysis results per model of success vs failed gel image post-segmentation analysis (distance and weight measurement) per imae
+    analysis_results = {}
+    if run_analysis:
+        analysis_results = {mname: {'successful': 0, 'failed': 0, 'log_lines': []} for mname in model_names}
+
     # preparing model outputs, including separation of different bands and labelling
     for im_index, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
 
@@ -447,6 +475,7 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
         all_model_outputs = []
 
         for model, mname in zip(models, model_names):
+            confidence_map = None # Initialise 
             # classical methods
             if mname == 'watershed':
                 _, mask = run_watershed(np_image, image_name, None)
@@ -456,10 +485,14 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
                 _, mask = read_nnunet_inference_from_file(os.path.join(model, image_name + '.tif'))
             else:
                 if multi_augment:
-                    _, mask = model_multi_augment_predict_and_process(model, batch['image'])
+                    _, mask, confidence_map = model_multi_augment_predict_and_process(model, batch['image'])
                 else:
-                    _, mask = model_predict_and_process(model, batch['image'])
+                    _, mask, confidence_map = model_predict_and_process(model, batch['image'])
                 mask = mask[:, pad_h1:-pad_h2, pad_w1:-pad_w2]
+                if confidence_map is not None: 
+                    #Same unpadding logic but for 1 channel
+                    confidence_map = confidence_map[pad_h1:-pad_h2, pad_w1:-pad_w2]
+
 
             # direct model plotting
             if mname == 'watershed':
@@ -472,7 +505,78 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
             rgb_labels = label2rgb(labels, image=np_image)
             all_model_outputs.append(rgb_labels)
             save_model_output(output_folder, mname, image_name, rgb_labels)
-            save_segmentation_map(output_folder, mname, image_name, mask, positive_pixel_colour=map_pixel_colour)
+            save_segmentation_map(output_folder, mname, image_name, mask,confidence_map=confidence_map, positive_pixel_colour=map_pixel_colour)
+
+            if run_analysis:
+                # Get path to the raw mask
+                raw_mask_path = os.path.join(output_folder, mname, f'{image_name}_raw_mask.tif')
+
+                # Check if confidence map exists ( Theoretical string path and actual path)
+                conf_path = os.path.join(output_folder, mname, f'{image_name}_confidence_map.tif')
+                confidence_path = conf_path if os.path.exists(conf_path) else None 
+                
+                # Set up analysis output paths 
+                analysis_plot_path = os.path.join(output_folder, mname, f'{image_name}_analysis.png')
+                analysis_report_path = os.path.join(output_folder, mname, f'{image_name}_report.txt')
+                analysis_csv_path = os.path.join(output_folder, mname, f'{image_name}_distances.csv')
+                
+                print(f"\n>>> Running analysis on {image_name} (model: {mname})...")
+                
+                try:
+                    # Runring analysis
+                    results = analyze_gel_with_proper_well_centric_approach(
+                        segmap_path=raw_mask_path,
+                        confidence_path=confidence_path,
+                        ladder_lane_id=None,  # Auto-select
+                        ladder_sizes_bp=ladder_sizes_bp,  # Will prompt if None
+                        renumber_lanes=True,
+                        show_plot=False,  # Need to update to remove 
+                        save_plot_path=analysis_plot_path,
+                        save_report_path=analysis_report_path
+                    )
+                    
+                    # Save CSV if results available
+                    if results and results.get('distances'):
+                        df = pd.DataFrame(results['distances'])
+                        df['image_name'] = image_name
+                        df['model_name'] = mname
+                        df.to_csv(analysis_csv_path, index=False)
+                        analysis_results[mname]['successful'] += 1
+                        analysis_results[mname]['log_lines'].append(f"SUCCESS: {image_name}")
+                        print(f"Analysis complete: {len(results['distances'])} distance measurements saved")
+                    else:
+                        analysis_results[mname]['failed'] += 1
+                        analysis_results[mname]['log_lines'].append(f"FAILED: {image_name} - No distances found")
+                        print(f"Analysis completed but no distances found")
+                    
+                except Exception as e:
+                    analysis_results[mname]['failed'] += 1
+                    analysis_results[mname]['log_lines'].append(f"FAILED: {image_name} - {str(e)}")
+                    print(f" Analysis failed for {image_name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
 
         plot_model_comparison(all_model_outputs, model_names, image_name, np_image, output_folder,
                               images_per_row, double_indexing)
+
+    # Write analysis summary logs at the end
+    if run_analysis:
+        from datetime import datetime
+        for mname in model_names:
+            results = analysis_results[mname]
+            total_analyzed = results['successful'] + results['failed']
+            
+            if total_analyzed > 0:  # Only if analysis was run for this model
+                log_path = os.path.join(output_folder, mname, 'analysis_log.txt')
+                with open(log_path, 'w') as f:
+                    f.write(f"Gel Analysis Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("="*60 + "\n\n")
+                    f.write(f"Model: {mname}\n")
+                    f.write(f"Total images: {total_analyzed}\n")
+                    f.write(f"Successful: {results['successful']}\n")
+                    f.write(f"Failed: {results['failed']}\n\n")
+                    f.write("Details:\n")
+                    f.write("-" * 20 + "\n")
+                    for line in results['log_lines']:
+                        f.write(line + "\n")
+                print(f"\n Analysis summary saved: {log_path}")

@@ -65,8 +65,13 @@ def model_eval_load(exp_folder, eval_epoch):
               help='Tuple with 1) the name of a pre-computed model and 2) path to its precomputed segmentation maps '
                    'for the dataset in question. These maps will be added to the output '
                    'images and quantified as normal.')
+@click.option('--run_analysis', is_flag=True, # To run band migration distance and weight measurement
+              help='Run gel electrophoresis image analysis after well and band segmentation')
+@click.option('--ladder_sizes', default=None, # For ladder 
+              help='Comma-separated ladder sizes in bp (e.g., "1000,750,500,250"). If not provided, this will be prompted for each image.')
+
 def segmentation_pipeline(model_and_epoch, model_folder, input_folder, output_folder, multi_augment,
-                          run_quant_analysis, mask_folder, classical_analysis, map_colour, add_map_from_file):
+                          run_quant_analysis, mask_folder, classical_analysis, map_colour, add_map_from_file, run_analysis, ladder_sizes):
 
     from os.path import join
     from gelgenie.segmentation.evaluation.core_functions import segment_and_plot, segment_and_quantitate
@@ -85,15 +90,24 @@ def segmentation_pipeline(model_and_epoch, model_folder, input_folder, output_fo
 
     if map_colour is None:
         map_colour = (163, 106, 13)
+    
+    # Initialise a variable to parse the ladder sizes provided
+    ladder_sizes_bp = None 
+    if ladder_sizes:
+        try:
+            ladder_sizes_bp = [float(x.strip()) for x in ladder_sizes.split(',')]
+            print(f"Using provided ladder sizes: {ladder_sizes_bp}")
+        except:
+            print("Could not parse the provided ladder sizes. Hence,will prompt for these during analysis")
 
     if run_quant_analysis:
         segment_and_quantitate(models, list(experiment_names), input_folder, mask_folder, output_folder,
                                multi_augment=multi_augment, run_classical_techniques=classical_analysis,
-                               map_pixel_colour=map_colour, nnunet_models_and_folders=add_map_from_file)
+                               map_pixel_colour=map_colour, nnunet_models_and_folders=add_map_from_file, run_analysis=run_analysis, ladder_sizes_bp=ladder_sizes_bp)
     else:
         segment_and_plot(models, list(experiment_names), input_folder, output_folder, multi_augment=multi_augment,
                          run_classical_techniques=classical_analysis, map_pixel_colour=map_colour,
-                         nnunet_models_and_folders=add_map_from_file)
+                         nnunet_models_and_folders=add_map_from_file, run_analysis=run_analysis, ladder_sizes_bp=ladder_sizes_bp)
 
 
 if __name__ == '__main__':
