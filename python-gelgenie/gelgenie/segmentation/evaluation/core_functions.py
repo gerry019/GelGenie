@@ -104,7 +104,7 @@ def save_model_output(output_folder, model_name, image_name, labelled_image):
     imageio.v2.imwrite(os.path.join(output_folder, model_name, '%s.png' % image_name), (labelled_image * 255).astype(np.uint8))
 
 
-def save_segmentation_map(output_folder, model_name, image_name, segmentation_map, confidence_map=None, positive_pixel_colour=(163, 106, 13)):
+def save_segmentation_map(output_folder, model_name, image_name, segmentation_map, confidence_map=None, band_colour=(163, 106, 13), well_colour= (0, 255,0)):
 
     if len(segmentation_map.shape) == 3:
         segmentation_map = segmentation_map.argmax(axis=0)
@@ -124,8 +124,17 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
     alpha_channel = np.where(segmentation_map > 0, 255, 0)
     rgba_array[:, :, 3] = alpha_channel
 
-    # Set RGB channels for positive data
-    rgba_array[:, :, :3] = np.where(segmentation_map[..., None] > 0, positive_pixel_colour, 0)
+    # Set RGB channels - updated to use different colour for bands and well 
+    rgba_array[:, :, :3] = np.where(
+        (segmentation_map == 1)[..., None],  # Bands
+        band_colour,
+        np.where(
+            (segmentation_map == 2)[..., None],  # Wells
+            well_colour,
+            0  # Background
+        )
+    )
+
 
     # Create PIL Image from RGBA array
     image = Image.fromarray(rgba_array, 'RGBA')
@@ -238,7 +247,7 @@ def read_nnunet_inference_from_file(nfile):
 def segment_and_quantitate(models, model_names, input_folder, mask_folder, output_folder,
                            minmax_norm=False, percentile_norm=False, multi_augment=False, images_per_row=3,
                            run_classical_techniques=False, nnunet_models_and_folders=None,
-                           map_pixel_colour=(163, 106, 13)):
+                           band_colour=(163, 106, 13), well_colour=(0, 255, 0)):
     """
 
     Segments images in input_folder using the selected models and computes their Dice score versus the ground truth labels.
@@ -388,7 +397,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
             all_model_outputs.append(rgb_labels)
             save_model_output(output_folder, mname, image_name, rgb_labels)
-            save_segmentation_map(output_folder, mname, image_name, mask, confidence_map=confidence_map, positive_pixel_colour=map_pixel_colour)
+            save_segmentation_map(output_folder, mname, image_name, mask, confidence_map=confidence_map, band_colour=band_colour, well_colour=well_colour)
 
         gt_labels, _ = ndi.label(gt_one_hot.numpy().squeeze().argmax(axis=0))
         gt_rgb_labels = label2rgb(gt_labels, image=np_image)
@@ -410,7 +419,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
 def segment_and_plot(models, model_names, input_folder, output_folder, minmax_norm=False, percentile_norm=False,
                      multi_augment=False, images_per_row=2, run_classical_techniques=False, nnunet_models_and_folders=None,
-                     map_pixel_colour=(163, 106, 13), run_analysis=False, ladder_sizes_bp=None):
+                     band_colour=(163, 106, 13), well_colour=(0, 255, 0), run_analysis=False, ladder_sizes_bp=None):
     """
     Segments images in input_folder using models and saves the output image and a quick comparison to the output folder.
     :param models: Pre-loaded pytorch segmentation models
@@ -505,7 +514,7 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
             rgb_labels = label2rgb(labels, image=np_image)
             all_model_outputs.append(rgb_labels)
             save_model_output(output_folder, mname, image_name, rgb_labels)
-            save_segmentation_map(output_folder, mname, image_name, mask,confidence_map=confidence_map, positive_pixel_colour=map_pixel_colour)
+            save_segmentation_map(output_folder, mname, image_name, mask,confidence_map=confidence_map, band_colour=(163, 106, 13), well_colour=(0, 255, 0))
 
             if run_analysis:
                 # Get path to the raw mask
