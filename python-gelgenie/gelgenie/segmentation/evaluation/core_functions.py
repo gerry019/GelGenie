@@ -30,6 +30,8 @@ from scipy import ndimage as ndi
 from skimage.color import label2rgb
 from scipy.spatial.distance import directed_hausdorff
 from skimage.segmentation import find_boundaries
+from skimage.measure import label, regionprops_table
+from matplotlib.patches import Patch
 from tqdm import tqdm
 import math
 import imageio
@@ -118,6 +120,65 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
         conf_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_map.tif')
         tiff.imwrite(conf_path, confidence_map.astype(np.float32)) # For continous numbers
     
+        # Updated version per pixel 
+        plt.figure(figsize=(8, 6))
+        plt.imshow(confidence_map, cmap='viridis', vmin=0, vmax=1)
+        plt.colorbar(label='Confidence')
+        plt.title(f'Confidence Map: {image_name}', fontsize=14)
+        plt.axis('off')
+        conf_viridis_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_viridis.png')
+        plt.savefig(conf_viridis_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    
+        # To visualise the confidence map ( per well/band)
+        conf_rgb = np.zeros((segmentation_map.shape[0], segmentation_map.shape[1], 3), dtype=np.uint8) 
+
+        # Loop through bands and wells
+        for cls_val in [1, 2]:  # 1=bands, 2=wells
+            mask_cls = (segmentation_map == cls_val)
+            if not np.any(mask_cls): # safety check
+                continue
+            # Label connected components within this class
+            labeled = label(mask_cls)
+
+            # The mean confidence for each labelled region (well/band)
+            props = regionprops_table(
+                labeled,
+                intensity_image=confidence_map,
+                properties=("label", "mean_intensity")
+            )
+
+            # Colors based on mean confidence
+            for region_label, mean_val in zip(props["label"], props["mean_intensity"]):
+                if mean_val > 0.8:
+                    color = (0, 255, 0)      # green = high confidence
+                elif mean_val > 0.5:
+                    color = (255, 255, 0)    # yellow = medium confidence
+                else:
+                    color = (255, 0, 0)      # red = low confidence
+                conf_rgb[labeled == region_label] = color
+
+        # Create figure with confidence overlay and legend
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(conf_rgb)
+        ax.axis('off')
+        ax.set_title(f'Confidence Map: {image_name}', fontsize=14, pad=10)
+
+        # Create legend patches
+        legend_elements = [
+            Patch(facecolor='green', label='High confidence (>80%)'),
+            Patch(facecolor='yellow', label='Medium confidence (50-80%)'),
+            Patch(facecolor='red', label='Low confidence (<50%)')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', framealpha=0.9, fontsize=10)
+        
+        plt.tight_layout() # spacing adjustment
+
+        # Saving the figure
+        conf_overlay_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_overlay.png')
+        plt.savefig(conf_overlay_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)        
+
     rgba_array = np.ones((segmentation_map.shape[0], segmentation_map.shape[1], 4), dtype=np.uint8)*255
 
     # negative pixels should have no alpha and no colour
@@ -364,7 +425,12 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                 c_mask = mask.argmax(axis=0).flatten()
 
             # standard metrics to complement dice score
-            tn, fp, fn, tp = confusion_matrix(c_mask, gt_mask.numpy().squeeze().flatten()).ravel()
+            # Convert multi-class to binary (foreground vs background)
+            c_mask_binary = (c_mask > 0).astype(int) # 0=false, 1=true
+            gt_mask_binary = (gt_mask.numpy().squeeze().flatten() > 0).astype(int)
+            # Force confusion matrix to always have both 0 and 1 classes
+            tn, fp, fn, tp = confusion_matrix(gt_mask_binary, c_mask_binary, labels=[0, 1]).ravel()            
+            
             precision = tp/(tp+fp)
 
             if tp == 0 and fn == 0:

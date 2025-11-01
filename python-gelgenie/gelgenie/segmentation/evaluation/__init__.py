@@ -107,7 +107,7 @@ def segmentation_pipeline(model_and_epoch, model_folder, input_folder, output_fo
     if run_quant_analysis:
         segment_and_quantitate(models, list(experiment_names), input_folder, mask_folder, output_folder,
                                multi_augment=multi_augment, run_classical_techniques=classical_analysis,
-                               band_colour=band_colour, well_colour=well_colour, nnunet_models_and_folders=add_map_from_file, run_analysis=run_analysis, ladder_sizes_bp=ladder_sizes_bp)
+                               band_colour=band_colour, well_colour=well_colour, nnunet_models_and_folders=add_map_from_file)
     else:
         segment_and_plot(models, list(experiment_names), input_folder, output_folder, multi_augment=multi_augment,
                          run_classical_techniques=classical_analysis, band_colour=band_colour, well_colour=well_colour,
