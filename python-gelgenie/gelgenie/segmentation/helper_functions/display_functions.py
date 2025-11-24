@@ -136,7 +136,16 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
     axs[3].set_title('True Mask')
 
     plt.setp(plt.gcf().get_axes(), xticks=[], yticks=[])  # remove ticks
-    fig.suptitle('Example Validation Image from Epoch %s (Dice Score %.3f)' % (epoch_number, dice_score), fontsize=16)
+
+    # Prints out  dice score for bands, wells and foreground
+    if isinstance(dice_score, dict):  # Checks for a dictionary
+        metrics_str = ", ".join([f"{k}: {v:.3f}" for k, v in dice_score.items()]) # Joins into a astring, separated by a comma
+        title_text = f"Example Validation Image from Epoch {epoch_number} (Dice – {metrics_str})"
+    else:
+        title_text = f"Example Validation Image from Epoch {epoch_number} (Dice: {dice_score:.3f})"
+
+    fig.suptitle(title_text, fontsize=14, wrap = True) # To be on multiple lines
+
     plt.tight_layout()
 
     plt.savefig(os.path.join(segmentation_path, f'sample_epoch_{epoch_number}_{optional_name}.pdf'), dpi=300)

@@ -422,15 +422,55 @@ class TrainingHandler:
                     else:
                         mask_pred = F.one_hot(mask_pred.argmax(dim=1), self.net.n_classes).permute(0, 3, 1, 2).float()
                         # compute the Dice score, ignoring background
-                        current_score = multiclass_dice_coeff(mask_pred[:, 1:, ...],
-                                                              mask_true[:, 1:, ...],
-                                                              reduce_batch_first=False).cpu().numpy()
-                         # Updated the score before the output for better debugging
-                        epoch_metrics['Dice Score'] += current_score
+
+                        # Foreground dice
+                        dice_fg = multiclass_dice_coeff(
+                            mask_pred[:, 1:, ...],
+                            mask_true[:, 1:, ...],
+                            reduce_batch_first=False
+                        ).cpu().numpy()
+
+                        # Dice for class 1 (bands)
+                        dice_band = multiclass_dice_coeff(
+                            mask_pred[:, 1:2, ...], # Slicing for class  1 only
+                            mask_true[:, 1:2, ...],
+                            reduce_batch_first=False
+                        ).cpu().numpy()
+
+                        # Dice for class 2 (wells)
+                        dice_well = multiclass_dice_coeff(
+                            mask_pred[:, 2:3, ...], # Slicing for class 2 only
+                            mask_true[:, 2:3, ...],
+                            reduce_batch_first=False
+                        ).cpu().numpy()
+
+                         # Simple average of band & well Dice
+                        dice_mean = 0.5 * (dice_band + dice_well)
+
+                        
+                        # Pack everything for visualisation
+                        dice_package = {
+                            "Foreground_dice_score": float(dice_fg),
+                            "Bands_dice_score": float(dice_band),
+                            "Wells_dice_score": float(dice_well),
+                        }
+
+                        # Appending metrics
+                        epoch_metrics['Dice Score'] += dice_fg       
+                        epoch_metrics['Class 1 (Bands) Validation Dice score'] += dice_band
+                        epoch_metrics['Class 2 (Wells) Validation Dice score'] += dice_well
+                        epoch_metrics['Foreground Validation Dice score mean'] += dice_mean
+
+                       # Updated the score before the output for better debugging
+                        current_score = dice_fg 
+
+    
 
                     if debug_this:
                         # Convert tensor into float
-                        rprint(f"[green]DEBUG: Loss {val_loss.item():.4f}, Dice {current_score:.4f}[/green]"); sys.stdout.flush()
+                        rprint(f"[green]DEBUG: Loss {val_loss.item():.4f}, "
+                            f"Dice_fg {dice_fg:.4f}, Dice_band {dice_band:.4f}, "
+                            f"Dice_well {dice_well:.4f}, Dice_mean {dice_mean:.4f}[/green]"); sys.stdout.flush()
 
                 pbar.update(1)
                 pbar.set_postfix(**{'Dice score (batch)': current_score})
@@ -444,7 +484,7 @@ class TrainingHandler:
                         image_array, threshold_mask_array, combi_mask_array, mask_true_array = \
                             visualise_segmentation(image.squeeze(), mask_pred.squeeze(),
                                                 mask_true.squeeze(),
-                                                epoch, dice_score=current_score,
+                                                epoch, dice_score=dice_package,
                                                 optional_name=batch['image_name'][0],
                                                 segmentation_path=self.example_output_folder)
                         if b_index == 0: # only one sample sent to wandb
@@ -504,7 +544,7 @@ class TrainingHandler:
             if self.val_loader is None:
                 stat_plotting = [['Training Loss'], ['Learning Rate']]
             else:
-                stat_plotting = [['Training Loss','Validation Loss', 'Dice Score'], ['Learning Rate']]
+                stat_plotting = [['Training Loss','Validation Loss', 'Dice Score', 'Class 1 (Bands) Validation Dice score', 'Class 2 (Wells) Validation Dice score', 'Foreground Validation Dice score mean'], ['Learning Rate']]
             if 'Dice Loss' in current_epoch_metrics and 'Cross-Entropy Loss' in current_epoch_metrics:
                 stat_plotting += [['Dice Loss', 'Cross-Entropy Loss']]
 
@@ -562,6 +602,9 @@ class TrainingHandler:
 
                     log_dict.update({
                         "Validation Dice": current_epoch_metrics["Dice Score"],
+                        "Class 1 (Bands) Validation Dice score": current_epoch_metrics["Class 1 (Bands) Validation Dice score"],
+                        "Class 2 (Wells) Validation Dice score": current_epoch_metrics["Class 2 (Wells) Validation Dice score"],
+                        "Foreground Validation Dice score mean": current_epoch_metrics["Foreground Validation Dice score mean"],
                         "Validation Loss": current_epoch_metrics["Validation Loss"],
                         "Validation Sample": {
                             "Input": wandb.Image(seg_sample_package["image"]),
