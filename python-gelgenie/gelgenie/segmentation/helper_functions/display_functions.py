@@ -139,7 +139,7 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
 
     # Prints out  dice score for bands, wells and foreground
     if isinstance(dice_score, dict):  # Checks for a dictionary
-        metrics_str = ", ".join([f"{k}: {v:.3f}" for k, v in dice_score.items()]) # Joins into a astring, separated by a comma
+        metrics_str = ", ".join([f"{k}: {v:.3f}" for k, v in dice_score.items()]) # Joins into a string, separated by a comma
         title_text = f"Example Validation Image from Epoch {epoch_number} (Dice – {metrics_str})"
     else:
         title_text = f"Example Validation Image from Epoch {epoch_number} (Dice: {dice_score:.3f})"

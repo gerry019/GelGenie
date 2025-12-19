@@ -272,8 +272,16 @@ class ImageMaskDataset(ImageDataset):
         # masks are specially prepared for easy reading, so there shouldn't the need for any further processing.
         # However, I have left a check here to indicate if something changes in the input data.
         unique = np.unique(mask)  # Acquire unique pixel values of the mask
-        if not all(unique == [0, 1, 2]):
-            raise RuntimeError('Mask data does not match expected format.')
+        allowed = {0, 1, 2}
+        u = set(unique.tolist())
+
+        if not u.issubset(allowed): # This allows masks that have a missing class
+            raise RuntimeError(
+                f"Mask data does not match expected format. "
+                f"Found values {sorted(u)} in {filename}"
+            )
+        return mask
+        
 
         # Previous processing:
         # Final pixel value = Index of original pixel value in the list of unique pixel values

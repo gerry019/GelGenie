@@ -354,7 +354,9 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         double_indexing = False
 
     metrics_dict = {}
-    metrics = ['Dice Score', 'MultiClass Dice Score', 'True Negatives', 'False Positives', 'False Negatives', 'True Positives', 'Precision', 'Recall', 'Hausdorff Distance']
+    metrics = ['Band Dice Score', 'Well Dice Score','Foreground Dice Score', 'MultiClass Dice Score', 'True Negatives', 'False Positives', 'False Negatives', 'True Positives', 'Precision', 'Recall','Band TP', 'Band FP', 'Band FN', 'Band TN',
+              'Band Precision', 'Band Recall', 'Band F1','Well TP', 'Well FP', 'Well FN', 'Well TN',
+              'Well Precision', 'Well Recall', 'Well F1', 'Hausdorff Distance',' Band Hausdorff Distance', ' Well Hausdorff Distance', ]
 
     for metric in metrics:
         metrics_dict[metric] = defaultdict(list)
@@ -410,6 +412,14 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                                                gt_one_hot[:, 1:, ...],
                                                reduce_batch_first=False).cpu().numpy()
 
+            dice_band = multiclass_dice_coeff(torch_one_hot[:, 1:2, ...],   # class 1 only
+                                              gt_one_hot[:, 1:2, ...],
+                                              reduce_batch_first=False).cpu().numpy()
+                                            
+            dice_well = multiclass_dice_coeff(torch_one_hot[:, 2:3, ...],   # class 2 only
+                                              gt_one_hot[:, 2:3, ...],
+                                              reduce_batch_first=False).cpu().numpy()
+
             dice_score_multi = multiclass_dice_coeff(torch_one_hot,
                                                      gt_one_hot,
                                                      reduce_batch_first=False).cpu().numpy()
@@ -438,6 +448,32 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             else:
                 recall = tp/(tp+fn)
 
+            # Additional metrics output for multiclass prediction ( confusion matrix)
+            if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
+                # Labels to be used for calculation (as above)
+                gt_labels = gt_mask.numpy().squeeze().flatten()
+                pred_labels = mask.argmax(axis=0).flatten()
+
+                # To make the confusion matrix for the foreground classes separately 
+                for cls_id, cls_name in [(1, "Band"), (2, "Well")]:
+                    gt_binary   = (gt_labels == cls_id).astype(int)
+                    pred_binary = (pred_labels == cls_id).astype(int)
+
+                    tn_cls, fp_cls, fn_cls, tp_cls = confusion_matrix(gt_binary, pred_binary, labels=[0,1]).ravel()
+
+                    # Ask if I should use nan instead
+                    precision_cls = tp_cls / (tp_cls + fp_cls) if (tp_cls + fp_cls) > 0 else 0.0
+                    recall_cls    = tp_cls / (tp_cls + fn_cls) if (tp_cls + fn_cls) > 0 else 0.0
+                    f1_cls        = 2 * (precision_cls * recall_cls) / (precision_cls + recall_cls) if (precision_cls + recall_cls) > 0 else 0.0
+
+                    metrics_dict[f"{cls_name} TP"][image_name].append(tp_cls)
+                    metrics_dict[f"{cls_name} FP"][image_name].append(fp_cls)
+                    metrics_dict[f"{cls_name} FN"][image_name].append(fn_cls)
+                    metrics_dict[f"{cls_name} TN"][image_name].append(tn_cls)
+                    metrics_dict[f"{cls_name} Precision"][image_name].append(precision_cls)
+                    metrics_dict[f"{cls_name} Recall"][image_name].append(recall_cls)
+                    metrics_dict[f"{cls_name} F1"][image_name].append(f1_cls)
+
             # Hausdorff distance calculation here
             # Extract boundary points of segmentation maps
             ground_truth_boundary = np.argwhere(find_boundaries(gt_one_hot[:, 1:, ...].cpu().numpy().squeeze().astype(int), mode="outer"))
@@ -448,7 +484,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             d2 = directed_hausdorff(prediction_boundary, ground_truth_boundary)[0]
             hausdorff_distance = max(d1, d2)
 
-            for metric, value in zip(metrics, [dice_score, dice_score_multi, tn, fp, fn, tp, precision, recall, hausdorff_distance]):
+            for metric, value in zip(metrics, [dice_band, dice_well, dice_score, dice_score_multi, tn, fp, fn, tp, precision, recall, hausdorff_distance]):
                 metrics_dict[metric][image_name].append(value)
 
             # direct model plotting

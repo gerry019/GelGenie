@@ -421,7 +421,6 @@ class TrainingHandler:
                         raise RuntimeError('Dice score not implemented for single class segmentation.')
                     else:
                         mask_pred = F.one_hot(mask_pred.argmax(dim=1), self.net.n_classes).permute(0, 3, 1, 2).float()
-                        # compute the Dice score, ignoring background
 
                         # Foreground dice
                         dice_fg = multiclass_dice_coeff(
