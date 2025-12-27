@@ -43,6 +43,7 @@ from sklearn.metrics import confusion_matrix
 from PIL import Image
 
 
+
 # location of reference data, to be imported if required in other files
 ref_data_folder = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir, os.path.pardir)),
                                'data_analysis', 'ref_data')
@@ -204,7 +205,50 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
 
     return image
 
+def save_annotated_output(output_folder, model_name, image_name, rgb_labels, metrics_dict):
+    """
+    Saves  every segmentation output (image) with a small text box showing the primary performance metrics.
+    Only outputted for ML models (not classical methods).
+    """
+    # Pull latest metric values for this image (according to the model being tested, as multiple models can be run at once)
+    band_dice      = metrics_dict["Band Dice Score"][image_name][-1]
+    well_dice      = metrics_dict["Well Dice Score"][image_name][-1]
+    fg_f1          = metrics_dict["Foreground F1"][image_name][-1]
+    precision_fg   = metrics_dict["Precision"][image_name][-1]
+    recall_fg      = metrics_dict["Recall"][image_name][-1]
+    
+    # Prepare tiny text block
+    textstr = (
+        f"Model: {model_name}\n"
+        f"Band Dice: {band_dice:.2f}\n"
+        f"Well Dice: {well_dice:.2f}\n"
+        f"FG F1: {fg_f1:.2f}\n"
+        f"Prec: {precision_fg:.2f}\n"
+        f"Rec: {recall_fg:.2f}"
+    )
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.imshow(rgb_labels) # Same image used afterwards
+    ax.axis("off")
+    
+    # Style box is rounded rectangle, white, semi-transparent.
+    props = dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.75, edgecolor="black")
+    
+    # Bottom-right corner 
+    ax.text(
+        0.98, 0.02, textstr,
+        transform=ax.transAxes,
+        fontsize=8,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=props
+    )
+    
+    save_path = os.path.join(output_folder, model_name, f"{image_name}_annotated.png")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
+    
 def plot_model_comparison(model_outputs, model_names, image_name, raw_image, output_folder, images_per_row,
                           double_indexing, comments=None, title_length_cutoff=20):
     """
@@ -354,11 +398,21 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         double_indexing = False
 
     metrics_dict = {}
-    metrics = ['Band Dice Score', 'Well Dice Score','Foreground Dice Score', 'MultiClass Dice Score', 'True Negatives', 'False Positives', 'False Negatives', 'True Positives', 'Precision', 'Recall','Band TP', 'Band FP', 'Band FN', 'Band TN',
-              'Band Precision', 'Band Recall', 'Band F1','Well TP', 'Well FP', 'Well FN', 'Well TN',
-              'Well Precision', 'Well Recall', 'Well F1', 'Hausdorff Distance',' Band Hausdorff Distance', ' Well Hausdorff Distance', ]
+    # Metrics that go through the zip loop (10 items, applies to ALL models, including classical methods)
+    metrics_for_zip = ['Foreground Dice Score', 'MultiClass Dice Score',
+                      'True Negatives', 'False Positives', 'False Negatives', 'True Positives', 
+                      'Precision', 'Recall', 'Foreground F1', 'Hausdorff Distance']
 
-    for metric in metrics:
+    # ALL metrics (for initialization and CSV output)
+    all_metrics = metrics_for_zip + [
+          'Band Dice Score', 'Well Dice Score',
+          'Band TP', 'Band FP', 'Band FN', 'Band TN',
+          'Band Precision', 'Band Recall', 'Band F1',
+          'Well TP', 'Well FP', 'Well FN', 'Well TN',
+          'Well Precision', 'Well Recall', 'Well F1']
+
+
+    for metric in all_metrics:
         metrics_dict[metric] = defaultdict(list)
 
     # preparing model outputs, including separation of different bands and labelling
@@ -412,18 +466,26 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                                                gt_one_hot[:, 1:, ...],
                                                reduce_batch_first=False).cpu().numpy()
 
-            dice_band = multiclass_dice_coeff(torch_one_hot[:, 1:2, ...],   # class 1 only
-                                              gt_one_hot[:, 1:2, ...],
-                                              reduce_batch_first=False).cpu().numpy()
-                                            
-            dice_well = multiclass_dice_coeff(torch_one_hot[:, 2:3, ...],   # class 2 only
-                                              gt_one_hot[:, 2:3, ...],
-                                              reduce_batch_first=False).cpu().numpy()
-
             dice_score_multi = multiclass_dice_coeff(torch_one_hot,
                                                      gt_one_hot,
                                                      reduce_batch_first=False).cpu().numpy()
+            
+            # Per-class dice scores (only for 3-class ML models)
+            if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
+                dice_band = multiclass_dice_coeff(torch_one_hot[:, 1:2, ...],
+                                                  gt_one_hot[:, 1:2, ...],
+                                                  reduce_batch_first=False).cpu().numpy()
+                                                
+                dice_well = multiclass_dice_coeff(torch_one_hot[:, 2:3, ...],
+                                                  gt_one_hot[:, 2:3, ...],
+                                                  reduce_batch_first=False).cpu().numpy()
+                
+                # Store per-class dice immediately
+                metrics_dict['Band Dice Score'][image_name].append(dice_band)
+                metrics_dict['Well Dice Score'][image_name].append(dice_well)
             display_dice_scores.append('Dice Score: %.3f' % dice_score)
+
+
 
             # confusion matrix calculation
             if mname == 'watershed':
@@ -434,38 +496,64 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             else:
                 c_mask = mask.argmax(axis=0).flatten()
 
-            # standard metrics to complement dice score
+            # Standard metrics to complement Dice score
             # Convert multi-class to binary (foreground vs background)
-            c_mask_binary = (c_mask > 0).astype(int) # 0=false, 1=true
+            c_mask_binary = (c_mask > 0).astype(int)
             gt_mask_binary = (gt_mask.numpy().squeeze().flatten() > 0).astype(int)
-            # Force confusion matrix to always have both 0 and 1 classes
-            tn, fp, fn, tp = confusion_matrix(gt_mask_binary, c_mask_binary, labels=[0, 1]).ravel()            
-            
-            precision = tp/(tp+fp)
+            tn, fp, fn, tp = confusion_matrix(
+                gt_mask_binary, c_mask_binary, labels=[0, 1]
+            ).ravel()
 
-            if tp == 0 and fn == 0:
-                recall = 0  # worst possible case
+            # Recall: Of all GT positives, how many did we find?
+            if tp + fn == 0:                 # no GT positives exist
+                recall = 1.0 if fp == 0 else 0.0   # false positive present so penalise
             else:
-                recall = tp/(tp+fn)
+                recall = tp / (tp + fn)
 
-            # Additional metrics output for multiclass prediction ( confusion matrix)
+            # Precision: Of all predictions, how many were correct?
+            if tp + fp == 0:                 # no predictions made
+                precision = 1.0 if fn == 0 else 0.0   # missed everything so penalise
+            else:
+                precision = tp / (tp + fp)
+
+            
+            # Foreground F1 score
+            if (precision + recall) == 0:
+                f1 = 0.0
+            else:
+                f1 = 2 * precision * recall / (precision + recall)
+
+            # Additional metrics output for multiclass prediction
             if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
-                # Labels to be used for calculation (as above)
-                gt_labels = gt_mask.numpy().squeeze().flatten()
+                gt_labels = gt_mask.numpy().squeeze().astype(int).flatten()
                 pred_labels = mask.argmax(axis=0).flatten()
-
-                # To make the confusion matrix for the foreground classes separately 
+    
                 for cls_id, cls_name in [(1, "Band"), (2, "Well")]:
                     gt_binary   = (gt_labels == cls_id).astype(int)
                     pred_binary = (pred_labels == cls_id).astype(int)
+                    tn_cls, fp_cls, fn_cls, tp_cls = confusion_matrix(
+                        gt_binary, pred_binary, labels=[0, 1]
+                    ).ravel()
 
-                    tn_cls, fp_cls, fn_cls, tp_cls = confusion_matrix(gt_binary, pred_binary, labels=[0,1]).ravel()
-
-                    # Ask if I should use nan instead
-                    precision_cls = tp_cls / (tp_cls + fp_cls) if (tp_cls + fp_cls) > 0 else 0.0
-                    recall_cls    = tp_cls / (tp_cls + fn_cls) if (tp_cls + fn_cls) > 0 else 0.0
-                    f1_cls        = 2 * (precision_cls * recall_cls) / (precision_cls + recall_cls) if (precision_cls + recall_cls) > 0 else 0.0
-
+                    # Recall
+                    if tp_cls + fn_cls == 0:          # no GT positives for this class
+                        recall_cls = 1.0 if fp_cls == 0 else 0.0
+                    else:
+                        recall_cls = tp_cls / (tp_cls + fn_cls)
+        
+                    # Precision
+                    if tp_cls + fp_cls == 0:          # no predicted positives
+                        precision_cls = 1.0 if fn_cls == 0 else 0.0
+                    else:
+                        precision_cls = tp_cls / (tp_cls + fp_cls)
+        
+                    # F1 score
+                    if (precision_cls + recall_cls) == 0:
+                        f1_cls = 0.0
+                    else:
+                        f1_cls = 2 * precision_cls * recall_cls / (precision_cls + recall_cls)
+        
+                    # Store metrics
                     metrics_dict[f"{cls_name} TP"][image_name].append(tp_cls)
                     metrics_dict[f"{cls_name} FP"][image_name].append(fp_cls)
                     metrics_dict[f"{cls_name} FN"][image_name].append(fn_cls)
@@ -473,6 +561,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                     metrics_dict[f"{cls_name} Precision"][image_name].append(precision_cls)
                     metrics_dict[f"{cls_name} Recall"][image_name].append(recall_cls)
                     metrics_dict[f"{cls_name} F1"][image_name].append(f1_cls)
+
 
             # Hausdorff distance calculation here
             # Extract boundary points of segmentation maps
@@ -484,7 +573,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             d2 = directed_hausdorff(prediction_boundary, ground_truth_boundary)[0]
             hausdorff_distance = max(d1, d2)
 
-            for metric, value in zip(metrics, [dice_band, dice_well, dice_score, dice_score_multi, tn, fp, fn, tp, precision, recall, hausdorff_distance]):
+            for metric, value in zip(metrics_for_zip, [dice_score, dice_score_multi, tn, fp, fn, tp, precision, recall, f1, hausdorff_distance]):
                 metrics_dict[metric][image_name].append(value)
 
             # direct model plotting
@@ -501,6 +590,9 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             save_model_output(output_folder, mname, image_name, rgb_labels)
             save_segmentation_map(output_folder, mname, image_name, mask, confidence_map=confidence_map, band_colour=band_colour, well_colour=well_colour)
 
+            if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
+                save_annotated_output(output_folder, mname, image_name, rgb_labels, metrics_dict)
+       
         gt_labels, _ = ndi.label(gt_one_hot.numpy().squeeze().argmax(axis=0))
         gt_rgb_labels = label2rgb(gt_labels, image=np_image)
 
@@ -510,7 +602,10 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                               images_per_row, double_indexing, comments=[''] + display_dice_scores)
 
     # combines and saves final dice score data into a table
-    for key, value in metrics_dict.items():
+    for key in all_metrics:
+        value = metrics_dict[key]
+        if not value or all(len(v) == 0 for v in value.values()):
+            continue # For metrics that are not included in the classical methods, skip that CSV
         pd_data = pd.DataFrame.from_dict(value, orient='index')
         pd_data.columns = model_names
         if len(pd_data) == 1: # this solves issues with computing mean when only one image is present
