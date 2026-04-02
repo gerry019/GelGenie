@@ -146,6 +146,7 @@ class TrainingHandler:
 
         # training details setup
         self.optimizer, self.scheduler = core_setup(self.net, **training_parameters)
+        self.config_lr = training_parameters['lr'] 
         self.current_epoch = 1
         self.max_epochs = training_parameters['epochs']
         self.checkpoint_saving = training_parameters['save_checkpoint']
@@ -237,8 +238,16 @@ class TrainingHandler:
         saved_dict = torch.load(filepath, map_location=self.device)
         self.net.load_state_dict(saved_dict['network'])  # Load in state dictionary of model network
         self.optimizer.load_state_dict(saved_dict['optimizer'])
+        for param_group in self.optimizer.param_groups: 
+            param_group['lr'] = self.config_lr          
+        print("Using LR:", [pg["lr"] for pg in self.optimizer.param_groups])  
         if self.scheduler:
             self.scheduler.load_state_dict(saved_dict['scheduler'])
+            self.scheduler.base_lrs = [self.config_lr for _ in self.scheduler.base_lrs]
+            if hasattr(self.scheduler, "_last_lr"):
+                self.scheduler._last_lr = [self.config_lr for _ in self.scheduler._last_lr]
+            print("LR after scheduler restore:", [pg["lr"] for pg in self.optimizer.param_groups])
+            print("Scheduler base_lrs:", self.scheduler.base_lrs)
         self.current_epoch = saved_dict['epoch'] + 1
         rprint(f'[bold orange] Model, optimizer and scheduler weights loaded from '
                f'(epoch {self.current_epoch})[/bold orange]')
@@ -539,6 +548,7 @@ class TrainingHandler:
                 self.scheduler.step(current_epoch_metrics['Dice Score'])
             elif type(self.scheduler).__name__ == 'CosineAnnealingWarmRestarts':
                 self.scheduler.step()
+                print("LR after first scheduler step:", [pg["lr"] for pg in self.optimizer.param_groups])
 
             if self.val_loader is None:
                 stat_plotting = [['Training Loss'], ['Learning Rate']]
