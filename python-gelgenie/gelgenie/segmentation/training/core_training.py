@@ -147,6 +147,7 @@ class TrainingHandler:
         # training details setup
         self.optimizer, self.scheduler = core_setup(self.net, **training_parameters)
         self.config_lr = training_parameters['lr'] 
+        self.config_restart_period = training_parameters.get('scheduler_specs', {}).get('restart_period', None) 
         self.current_epoch = 1
         self.max_epochs = training_parameters['epochs']
         self.checkpoint_saving = training_parameters['save_checkpoint']
@@ -242,12 +243,28 @@ class TrainingHandler:
             param_group['lr'] = self.config_lr          
         print("Using LR:", [pg["lr"] for pg in self.optimizer.param_groups])  
         if self.scheduler:
-            self.scheduler.load_state_dict(saved_dict['scheduler'])
-            self.scheduler.base_lrs = [self.config_lr for _ in self.scheduler.base_lrs]
+            try:
+                self.scheduler.load_state_dict(saved_dict['scheduler'])
+                print(f"Scheduler state loaded successfully: {type(self.scheduler).__name__}")
+                print("Scheduler last_epoch after load:", self.scheduler.last_epoch)
+                if hasattr(self.scheduler, 'T_0'):
+                    print("Scheduler T_0 after load:", self.scheduler.T_0)
+                    print("Scheduler T_i after load:", self.scheduler.T_i)
+                    print("Scheduler T_cur after load:", self.scheduler.T_cur)
+            except Exception as e:
+                print(f"Scheduler state not loaded (type mismatch), starting fresh: {e}")
+            if hasattr(self.scheduler, 'base_lrs'):
+                self.scheduler.base_lrs = [self.config_lr for _ in self.scheduler.base_lrs]            
             if hasattr(self.scheduler, "_last_lr"):
                 self.scheduler._last_lr = [self.config_lr for _ in self.scheduler._last_lr]
+            if hasattr(self.scheduler, 'T_0') and self.config_restart_period:
+                self.scheduler.T_0 = self.config_restart_period
+                self.scheduler.T_i = self.config_restart_period
+                print("Scheduler T_0 overridden to:", self.scheduler.T_0) 
+                print("Scheduler T_i overridden to:", self.scheduler.T_i)   
             print("LR after scheduler restore:", [pg["lr"] for pg in self.optimizer.param_groups])
-            print("Scheduler base_lrs:", self.scheduler.base_lrs)
+            if hasattr(self.scheduler, 'base_lrs'):
+                print("Scheduler base_lrs:", self.scheduler.base_lrs)
         self.current_epoch = saved_dict['epoch'] + 1
         rprint(f'[bold orange] Model, optimizer and scheduler weights loaded from '
                f'(epoch {self.current_epoch})[/bold orange]')
@@ -549,6 +566,8 @@ class TrainingHandler:
             elif type(self.scheduler).__name__ == 'CosineAnnealingWarmRestarts':
                 self.scheduler.step()
                 print("LR after first scheduler step:", [pg["lr"] for pg in self.optimizer.param_groups])
+                print("Scheduler last_epoch:", self.scheduler.last_epoch)
+                print("Scheduler T_0:", self.scheduler.T_0)
 
             if self.val_loader is None:
                 stat_plotting = [['Training Loss'], ['Learning Rate']]
