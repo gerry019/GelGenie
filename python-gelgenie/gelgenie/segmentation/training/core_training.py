@@ -147,6 +147,7 @@ class TrainingHandler:
         # training details setup
         self.optimizer, self.scheduler = core_setup(self.net, **training_parameters)
         self.config_lr = training_parameters['lr'] 
+        self.reset_optimizer = training_parameters.get('reset_optimizer', False)
         self.config_restart_period = training_parameters.get('scheduler_specs', {}).get('restart_period', None) 
         self.current_epoch = 1
         self.max_epochs = training_parameters['epochs']
@@ -238,10 +239,17 @@ class TrainingHandler:
         filepath = join(self.checkpoints_folder, 'checkpoint_epoch_%s.pth' % checkpoint)
         saved_dict = torch.load(filepath, map_location=self.device)
         self.net.load_state_dict(saved_dict['network'])  # Load in state dictionary of model network
-        self.optimizer.load_state_dict(saved_dict['optimizer'])
+        if not self.reset_optimizer:
+            try:
+                self.optimizer.load_state_dict(saved_dict['optimizer'])
+            except Exception as e:
+                print(f"Optimizer state not loaded: {e}")
+        else:
+            print("Resetting optimizer, skipping checkpoint state load")
         for param_group in self.optimizer.param_groups: 
             param_group['lr'] = self.config_lr          
         print("Using LR:", [pg["lr"] for pg in self.optimizer.param_groups])  
+        print("Optimizer type:", type(self.optimizer).__name__)
         if self.scheduler:
             try:
                 self.scheduler.load_state_dict(saved_dict['scheduler'])
@@ -563,6 +571,7 @@ class TrainingHandler:
 
             if type(self.scheduler).__name__ == 'ReduceLROnPlateau':
                 self.scheduler.step(current_epoch_metrics['Dice Score'])
+                print(f"ReduceLROnPlateau best: {self.scheduler.best:.6f}, num_bad_epochs: {self.scheduler.num_bad_epochs}")
             elif type(self.scheduler).__name__ == 'CosineAnnealingWarmRestarts':
                 self.scheduler.step()
                 print("LR after first scheduler step:", [pg["lr"] for pg in self.optimizer.param_groups])
