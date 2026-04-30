@@ -56,6 +56,25 @@ else:
     wandb_available = False
 
 
+class EarlyStopper:
+    def __init__(self, patience=10, min_delta=0.005):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.history = []
+
+    def check(self, score):
+        self.history.append(float(score))
+
+        if len(self.history) < self.patience:
+            return False
+
+        recent = self.history[-self.patience:]
+
+        # stop if last 10 scores are withing the chosen min_delta
+        fluctuation = max(recent) - min(recent)
+
+        return fluctuation <= self.min_delta
+
 class TrainingHandler:
     def __init__(self, experiment_name, base_dir,
                  training_parameters, processing_parameters,
@@ -151,6 +170,11 @@ class TrainingHandler:
         self.config_restart_period = training_parameters.get('scheduler_specs', {}).get('restart_period', None) 
         self.current_epoch = 1
         self.max_epochs = training_parameters['epochs']
+        early_stopping_enabled = 'early_stopping_patience' in training_parameters
+        self.early_stopper = EarlyStopper(
+            patience=training_parameters.get('early_stopping_patience', 20),
+            min_delta=training_parameters.get('early_stopping_delta', 0.002)
+        ) if early_stopping_enabled else None
         self.checkpoint_saving = training_parameters['save_checkpoint']
         self.checkpoint_save_frequency = training_parameters['checkpoint_frequency']
         self.model_cleanup_frequency = training_parameters['model_cleanup_frequency']
@@ -274,6 +298,9 @@ class TrainingHandler:
             if hasattr(self.scheduler, 'base_lrs'):
                 print("Scheduler base_lrs:", self.scheduler.base_lrs)
         self.current_epoch = saved_dict['epoch'] + 1
+        if self.early_stopper is not None and 'early_stopper' in saved_dict and saved_dict['early_stopper'] is not None:
+            self.early_stopper.history = saved_dict['early_stopper'].get('history', [])
+            print(f"Early stopper history restored: {len(self.early_stopper.history)} epochs")
         rprint(f'[bold orange] Model, optimizer and scheduler weights loaded from '
                f'(epoch {self.current_epoch})[/bold orange]')
 
@@ -287,6 +314,10 @@ class TrainingHandler:
         if self.scheduler:
             full_state_dict['scheduler'] = self.scheduler.state_dict()
         full_state_dict['epoch'] = self.current_epoch
+        if self.early_stopper is not None:
+            full_state_dict['early_stopper'] = {
+                'history': self.early_stopper.history
+            }
 
         if self.is_tpu: # to save
             xm.save(full_state_dict, join(self.checkpoints_folder, name))
@@ -444,7 +475,7 @@ class TrainingHandler:
                         if debug_this:
                             rprint(f"[green]DEBUG: Forward pass + TPU sync completed[/green]"); sys.stdout.flush()
 
-                    # Calcualte the validation loss
+                    # Calculate the validation loss
                     temp_metrics = defaultdict(float) # Temporary dict - won't affect anything
                     val_loss = self.loss_calculation(mask_pred, mask_true_for_loss, temp_metrics)
                     epoch_metrics['Validation Loss'] += val_loss.detach().cpu().numpy()
@@ -565,6 +596,11 @@ class TrainingHandler:
 
             current_epoch_metrics = {**train_metrics, **val_metrics}  # combines all metrics
 
+            if self.val_loader is not None and self.early_stopper is not None:
+                early_stop = self.early_stopper.check(current_epoch_metrics['Dice Score'])
+            else:
+                early_stop = False
+
             for key in current_epoch_metrics.keys():
                 total_metrics[key].append(current_epoch_metrics[key])
             total_metrics['Epoch'].append(epoch)
@@ -662,8 +698,12 @@ class TrainingHandler:
                 self.wandb_package.log(log_dict)
 
 
-            if self.checkpoint_saving and (epoch == self.max_epochs or epoch % self.checkpoint_save_frequency == 0):
-                self.save_checkpoint('checkpoint_epoch_%s.pth' % epoch)
+            if self.checkpoint_saving and (epoch == self.max_epochs or epoch % self.checkpoint_save_frequency == 0 or early_stop):                self.save_checkpoint('checkpoint_epoch_%s.pth' % epoch)
+
+            if early_stop:
+                rprint(f'[bold red]Early stopping triggered at epoch {epoch} '
+                      f'best dice: {max(self.early_stopper.history):.4f}[/bold red]')
+                break
 
             if self.model_cleanup_frequency > 0 and epoch % self.model_cleanup_frequency == 0:
                 top_epoch_idx = sorted(range(len(total_metrics[self.model_cleanup_metric])),
