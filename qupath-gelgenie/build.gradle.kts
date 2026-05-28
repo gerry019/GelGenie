@@ -1,3 +1,5 @@
+group = "io.github.mattaq31"
+version = "1.1.0"
 plugins {
     // Support writing the extension in Groovy (remove this if you don't want to)
     groovy

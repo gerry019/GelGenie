@@ -63,6 +63,9 @@ public class GelGenieModel {
     @SerializedName("modelType")
     private String modelType;
 
+    @SerializedName("num_classes")
+    private int numClasses = 2; //defaults to 2 unless otherwise specified
+
     private Boolean dummyModel = false;
 
     public String getName() {
@@ -80,6 +83,8 @@ public class GelGenieModel {
     public String getModelType() {return modelType;}
 
     public Boolean isDummyModel() {return dummyModel;}
+
+    public int getNumClasses() {return numClasses;}
 
     public void setDummyModel(Boolean dummyModel) {this.dummyModel = dummyModel;}
 

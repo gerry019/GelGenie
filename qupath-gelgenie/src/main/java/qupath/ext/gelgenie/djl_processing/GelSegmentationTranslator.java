@@ -43,8 +43,9 @@ public class GelSegmentationTranslator extends BaseImageTranslator<CategoryMask>
     public int bottomPad;
     public int leftPad;
     public int rightPad;
+    public int numClasses;
 
-    public GelSegmentationTranslator(Builder builder, int imageWidth, int imageHeight, int topPad, int bottomPad, int leftPad, int rightPad) {
+    public GelSegmentationTranslator(Builder builder, int imageWidth, int imageHeight, int topPad, int bottomPad, int leftPad, int rightPad, int numClasses) {
 
         super(builder);
         this.synsetLoader = builder.synsetLoader();
@@ -54,6 +55,7 @@ public class GelSegmentationTranslator extends BaseImageTranslator<CategoryMask>
         this.bottomPad = bottomPad;
         this.leftPad = leftPad;
         this.rightPad = rightPad;
+        this.numClasses = numClasses;
     }
 
     @Override
@@ -62,6 +64,9 @@ public class GelSegmentationTranslator extends BaseImageTranslator<CategoryMask>
             classes = new ArrayList<>();
             classes.add("Background");
             classes.add("Gel Band");
+            if (numClasses > 2) {
+                classes.add("Well");
+            }
         }
     }
 
@@ -130,9 +135,9 @@ public class GelSegmentationTranslator extends BaseImageTranslator<CategoryMask>
             return this;
         }
 
-        public GelSegmentationTranslator build(int imageWidth, int imageHeight, int topPad, int bottomPad, int leftPad, int rightPad) {
+        public GelSegmentationTranslator build(int imageWidth, int imageHeight, int topPad, int bottomPad, int leftPad, int rightPad,  int numClasses) {
             validate();
-            return new GelSegmentationTranslator(this, imageWidth, imageHeight, topPad, bottomPad, leftPad, rightPad);
+            return new GelSegmentationTranslator(this, imageWidth, imageHeight, topPad, bottomPad, leftPad, rightPad, numClasses);
         }
 
         public void configPreProcess(Map<String, ?> arguments) {

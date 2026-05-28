@@ -34,6 +34,7 @@ import qupath.ext.gelgenie.ui.GUIRootCommand;
 /**
  This is the main access point for all the GelGenie functionality.
  */
+
 public class GelGenie implements QuPathExtension, GitHubProject {
 
     private final static ResourceBundle resources = ResourceBundle.getBundle("qupath.ext.gelgenie.ui.strings");
@@ -49,6 +50,7 @@ public class GelGenie implements QuPathExtension, GitHubProject {
 
     @Override
     public void installExtension(QuPathGUI qupath) {
+        System.err.println("GelGenie.installExtension HIT");
         if (isInstalled) {
             logger.debug("{} is already installed", getName());
             return;

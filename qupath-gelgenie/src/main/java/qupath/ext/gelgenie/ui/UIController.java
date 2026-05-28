@@ -268,7 +268,7 @@ public class UIController {
         // Assuming that the content of the tab is VBox
         double newHeight = 0;
         for (Node titlePane : ((VBox) selectedTab.getContent()).getChildren()) {
-                newHeight += titlePane.getBoundsInParent().getHeight();
+            newHeight += titlePane.getBoundsInParent().getHeight();
         }
         mainTabGroup.setPrefHeight(newHeight + 40); // 40 is a buffer for tab headers and padding
     }
@@ -769,7 +769,8 @@ public class UIController {
                 ArrayList<PathObject> removables = new ArrayList<>();
                 for (PathObject annot : getAnnotationObjects()) {
                     var pathClass = PathClass.getInstance("Gel Band");
-                    if (annot.getPathClass() != null && annot.getPathClass().equals(pathClass)) {
+                    var wellClass = PathClass.getInstance("Well");
+                    if (annot.getPathClass() != null && (annot.getPathClass().equals(pathClass) || annot.getPathClass().equals(wellClass))) {
                         removables.add(annot);
                     }
                 }
@@ -783,7 +784,8 @@ public class UIController {
                 return;
             }
             for (PathObject annot : newBands) {
-                annot.setPathClass(PathClass.fromString("Gel Band", 10709517));
+                if (annot.getPathClass() == null)
+                    annot.setPathClass(PathClass.fromString("Gel Band", 10709517));
                 // can use this converter to select the integer color from an RGB code: http://www.shodor.org/~efarrow/trunk/html/rgbint.html
             }
             addObjects(newBands);
@@ -860,8 +862,8 @@ public class UIController {
 
         // adds scriptable command for later execution
         addDataComputeAndExportToHistoryWorkflow(getCurrentImageData(), enableGlobalBackground.isSelected(),
-                                                enableLocalBackground.isSelected(), enableRollingBackground.isSelected(),
-                                                localSensitivity.getValue(), rollingRadius.getValue(), !imageInversion.isSelected());
+                enableLocalBackground.isSelected(), enableRollingBackground.isSelected(),
+                localSensitivity.getValue(), rollingRadius.getValue(), !imageInversion.isSelected());
     }
 
     /**

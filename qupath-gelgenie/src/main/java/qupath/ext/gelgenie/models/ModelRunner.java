@@ -142,7 +142,8 @@ public class ModelRunner {
     public static Collection<PathObject> runFullImageInferenceAndAddAnnotations(String model, Boolean useDJL, Boolean invertImage, Boolean dataMaxNorm) throws TranslateException, ModelNotFoundException, MalformedModelException, IOException {
         Collection<PathObject> annotations = runFullImageInference(model, useDJL, invertImage, dataMaxNorm);
         for (PathObject annot : annotations) {
-            annot.setPathClass(PathClass.fromString("Gel Band", 8000));
+            if (annot.getPathClass() == null)
+                annot.setPathClass(PathClass.fromString("Gel Band", 8000));
         }
         addObjects(annotations);
 
@@ -290,39 +291,36 @@ public class ModelRunner {
         Translator<Image, CategoryMask> translator;
 
         // prepares pipeline for preprocessing and running models here
-        if (nnunetConfig){ // nnunet do not require any padding (this is done internally in the torchscript model)
-            if (invertImage){
+        if (nnunetConfig) { // nnunet do not require any padding (this is done internally in the torchscript model)
+            if (invertImage) {
                 translator = NnUNetSegmentationTranslator.builder()
                         .addTransform(createToTensorTransform(device))
                         .addTransform(new ChannelSquisher())
                         .addTransform(new ImageInvert())
                         .build(imageWidth, imageHeight);
-            }
-            else {
+            } else {
                 translator = NnUNetSegmentationTranslator.builder()
                         .addTransform(createToTensorTransform(device))
                         .addTransform(new ChannelSquisher())
                         .build(imageWidth, imageHeight);
             }
-        }
-        else {
+        } else {
 
             int[] fullPadding = getPadding(imageHeight, imageWidth, 32);
 
-            if (invertImage){  // inverts image (only if requested)
+            if (invertImage) {  // inverts image (only if requested)
                 translator = GelSegmentationTranslator.builder()
                         .addTransform(createToTensorTransform(device))
                         .addTransform(new DivisibleSizePad(fullPadding[0], fullPadding[1], fullPadding[2], fullPadding[3]))
                         .addTransform(new ChannelSquisher())
                         .addTransform(new ImageInvert())
-                        .build(request.getWidth(), request.getHeight(), fullPadding[2], fullPadding[3], fullPadding[0], fullPadding[1]);
-            }
-            else {
+                        .build(request.getWidth(), request.getHeight(), fullPadding[2], fullPadding[3], fullPadding[0], fullPadding[1], model.getNumClasses());
+            } else {
                 translator = GelSegmentationTranslator.builder()
                         .addTransform(createToTensorTransform(device))
                         .addTransform(new DivisibleSizePad(fullPadding[0], fullPadding[1], fullPadding[2], fullPadding[3]))
                         .addTransform(new ChannelSquisher())
-                        .build(request.getWidth(), request.getHeight(), fullPadding[2], fullPadding[3], fullPadding[0], fullPadding[1]);
+                        .build(request.getWidth(), request.getHeight(), fullPadding[2], fullPadding[3], fullPadding[0], fullPadding[1], model.getNumClasses());
             }
         }
 
@@ -338,8 +336,7 @@ public class ModelRunner {
         Image image;
         if (img.getType() == BufferedImage.TYPE_BYTE_GRAY) {
             image = factory.fromImage(img);
-        }
-        else{
+        } else {
             // as with opencv, user is given the choice between max pixel and max range normalization for non 8-bit images
             Mat convertedImage = convertAndNormalizeNonStandardImage(img, imageData, dataMaxNorm);
 
@@ -361,7 +358,7 @@ public class ModelRunner {
                 .optProgress(new ProgressBar()).build();
 
         int[][] maskOrig; // predicts masks from image, making sure to autoclose the model and predictor when complete
-        try(ZooModel<Image, CategoryMask> modelConstruct = criteria.loadModel()) {
+        try (ZooModel<Image, CategoryMask> modelConstruct = criteria.loadModel()) {
             try (Predictor<Image, CategoryMask> predictor = modelConstruct.newPredictor()) {
                 CategoryMask mask = predictor.predict(image);
                 maskOrig = mask.getMask(); // extracts out integer array for downstream processing
@@ -369,16 +366,49 @@ public class ModelRunner {
         }
 
         try (var scope = new PointerScope()) { // pointer scope allows for automatic memory management
-            // The below converts the integer array into openCV Mat.  Unsure if there is a more elegant way to do this.
-            Mat imMat = new Mat(request.getHeight(), request.getWidth(), CvType.CV_32F);
-            Indexer indexer = imMat.createIndexer();
-            for (int i = 0; i < request.getHeight(); i++) {
-                for (int j = 0; j < request.getWidth(); j++) {
-                    ((FloatIndexer) indexer).put(i, j, maskOrig[i][j]);
+            if (model.getNumClasses() > 2) { // for three class segmentation
+                // integer array to opencv mat for both gel band and wells
+                Mat bandMat = new Mat(request.getHeight(), request.getWidth(), CvType.CV_32F);
+                Mat wellMat = new Mat(request.getHeight(), request.getWidth(), CvType.CV_32F);
+                // to fill in the empty mat created above
+                Indexer bandIndexer = bandMat.createIndexer();
+                Indexer wellIndexer = wellMat.createIndexer();
+                for (int i = 0; i < request.getHeight(); i++) {
+                    for (int j = 0; j < request.getWidth(); j++) {
+                        // fill in 1 for each pixel that is either a band or a well in the respective matrix
+                        ((FloatIndexer) bandIndexer).put(i, j, maskOrig[i][j] == 1 ? 1 : 0);
+                        ((FloatIndexer) wellIndexer).put(i, j, maskOrig[i][j] == 2 ? 1 : 0);
+                    }
                 }
-            }
+                // store band and well ROIs separately so they can be tagged with different colours before merging
+                Collection<PathObject> bandROIs = findSplitROIs(bandMat, request); //find band ROI
+                Collection<PathObject> wellROIs = findSplitROIs(wellMat, request); // find well ROI
 
-            return findSplitROIs(imMat, request); // final splitter operation
+                // assign different colours and names to bands and wells
+                for (PathObject band : bandROIs) {
+                    band.setPathClass(PathClass.fromString("Gel Band", 10709517));
+                }
+                for (PathObject well : wellROIs) {
+                    well.setPathClass(PathClass.fromString("Well", 3394611));
+                }
+
+                // merge both collections and return
+                Collection<PathObject> allROIs = new ArrayList<>();
+                allROIs.addAll(bandROIs);
+                allROIs.addAll(wellROIs);
+                return allROIs;
+            } else {
+                // The below converts the integer array into openCV Mat.  Unsure if there is a more elegant way to do this.
+                Mat imMat = new Mat(request.getHeight(), request.getWidth(), CvType.CV_32F);
+                Indexer indexer = imMat.createIndexer();
+                for (int i = 0; i < request.getHeight(); i++) {
+                    for (int j = 0; j < request.getWidth(); j++) {
+                        ((FloatIndexer) indexer).put(i, j, maskOrig[i][j]);
+                    }
+                }
+
+                return findSplitROIs(imMat, request); // final splitter operation
+            }
         }
     }
 

@@ -51,11 +51,18 @@ public class BandSorter {
             }
             currentLaneBands.sort(Comparator.comparing((PathObject p) -> p.getROI().getCentroidY()));
             bandIdCounter = 1;
+            int wellIdCounter = 1;
             for (PathObject band: currentLaneBands) {
-                band.setName(String.format("L%d-%d", laneIdCounter, bandIdCounter));
                 band.getMeasurementList().put("LaneID", laneIdCounter);
-                band.getMeasurementList().put("BandID", bandIdCounter);
-                bandIdCounter++;
+                if (band.getPathClass() != null && band.getPathClass().getName().equals("Well")) {
+                    band.setName(String.format("L%d-%d", laneIdCounter, wellIdCounter));
+                    band.getMeasurementList().put("WellID", wellIdCounter);
+                    wellIdCounter++;
+                } else {
+                    band.setName(String.format("L%d-%d", laneIdCounter, bandIdCounter));
+                    band.getMeasurementList().put("BandID", bandIdCounter);
+                    bandIdCounter++;
+                }
                 bands.remove(band);
             }
 

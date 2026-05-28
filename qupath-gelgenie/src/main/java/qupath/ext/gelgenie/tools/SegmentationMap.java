@@ -55,6 +55,7 @@ public class SegmentationMap {
                 .backgroundLabel(0, ColorTools.WHITE)
                 .downsample(1.0)
                 .addLabel("Gel Band", 1)
+                .addLabel("Well", 2)
                 .multichannelOutput(false)
                 .build();
 
