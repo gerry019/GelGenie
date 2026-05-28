@@ -16,7 +16,7 @@
 
 import rich_click as click
 import sys
-
+import toml
 
 def model_eval_load(exp_folder, eval_epoch):
     import toml
@@ -59,14 +59,21 @@ def model_eval_load(exp_folder, eval_epoch):
               help='Path to ground truth mask data corresponding to input images.')
 @click.option('--classical_analysis', is_flag=True,
               help='Set this flag to also run classical analyses for comparison purposes.')
-@click.option('--map_colour', default=None, type=(int, int, int),
-              help='Colour to use for output segmentation map.  Default is a brown/golden colour.')
+@click.option('--band_colour', default=None, type=(int, int, int), # For pixel map output
+              help='Colour to use for bands in segmentation map. Default is brown/golden (163, 106, 13).')
+@click.option('--well_colour', default=None, type=(int, int, int), # For pixel map output
+              help='Colour to use for wells in segmentation map. Default is green (0, 255, 0).')
 @click.option('--add_map_from_file', default=None, type=(str, str), multiple=True,
               help='Tuple with 1) the name of a pre-computed model and 2) path to its precomputed segmentation maps '
                    'for the dataset in question. These maps will be added to the output '
                    'images and quantified as normal.')
+@click.option('--run_analysis', is_flag=True, # To run band migration distance and weight measurement
+              help='Run gel electrophoresis image analysis after well and band segmentation')
+@click.option('--ladder_sizes', default=None, # For ladder 
+              help='Comma-separated ladder sizes in bp (e.g., "1000,750,500,250"). If not provided, this will be prompted for each image.')
+
 def segmentation_pipeline(model_and_epoch, model_folder, input_folder, output_folder, multi_augment,
-                          run_quant_analysis, mask_folder, classical_analysis, map_colour, add_map_from_file):
+                          run_quant_analysis, mask_folder, classical_analysis, band_colour, well_colour, add_map_from_file, run_analysis, ladder_sizes):
 
     from os.path import join
     from gelgenie.segmentation.evaluation.core_functions import segment_and_plot, segment_and_quantitate
@@ -83,17 +90,29 @@ def segmentation_pipeline(model_and_epoch, model_folder, input_folder, output_fo
 
     create_dir_if_empty(output_folder)
 
-    if map_colour is None:
-        map_colour = (163, 106, 13)
+    if band_colour is None:
+        band_colour = (163, 106, 13) # Default band colour
+    if well_colour is None:
+        well_colour = (0, 255, 0) # Default well colour
+    
+    # Initialise a variable to parse the ladder sizes provided
+    ladder_sizes_bp = None 
+    if ladder_sizes:
+        try:
+            ladder_sizes_bp = [float(x.strip()) for x in ladder_sizes.split(',')]
+            print(f"Using provided ladder sizes: {ladder_sizes_bp}")
+        except:
+            print("Could not parse the provided ladder sizes. Hence,will prompt for these during analysis")
 
     if run_quant_analysis:
+        num_classes = toml.load(join(model_folder, experiment_names[0], 'config.toml'))['model']['classes']
         segment_and_quantitate(models, list(experiment_names), input_folder, mask_folder, output_folder,
                                multi_augment=multi_augment, run_classical_techniques=classical_analysis,
-                               map_pixel_colour=map_colour, nnunet_models_and_folders=add_map_from_file)
+                               band_colour=band_colour, well_colour=well_colour, nnunet_models_and_folders=add_map_from_file, num_classes=num_classes)
     else:
         segment_and_plot(models, list(experiment_names), input_folder, output_folder, multi_augment=multi_augment,
-                         run_classical_techniques=classical_analysis, map_pixel_colour=map_colour,
-                         nnunet_models_and_folders=add_map_from_file)
+                         run_classical_techniques=classical_analysis, band_colour=band_colour, well_colour=well_colour,
+                         nnunet_models_and_folders=add_map_from_file, run_analysis=run_analysis, ladder_sizes_bp=ladder_sizes_bp)
 
 
 if __name__ == '__main__':

@@ -31,7 +31,7 @@ from gelgenie.segmentation.helper_functions.general_functions import extract_ima
 class ImageDataset(Dataset):
     def __init__(self, images_dir: str, n_channels: int, padding: bool = False,
                  individual_padding=False, image_names=None, augmentations=None,
-                 minmax_norm=False, percentile_norm=False):
+                 minmax_norm=False, percentile_norm=False, invert_images=False):
         """
         For datasets of images only, used in model_eval if no masks are provided
         :param images_dir: Path of image directory
@@ -50,6 +50,7 @@ class ImageDataset(Dataset):
         self.n_channels = n_channels
         self.minmax_norm = minmax_norm
         self.percentile_norm = percentile_norm
+        self.invert_images = invert_images
         self.standard_image_transform = transforms.Compose([transforms.ToTensor()])  # Transforms image to tensor
 
         self.image_folders = images_dir
@@ -119,6 +120,9 @@ class ImageDataset(Dataset):
         image = imageio.v2.imread(filename)
 
         image = ImageDataset.channel_converter(image, self.n_channels)
+
+        if self.invert_images: # For light bands on dark background
+            image = np.iinfo(image.dtype).max - image
 
         # Normalizing image
         if self.minmax_norm:
@@ -191,7 +195,7 @@ class ImageDataset(Dataset):
 class ImageMaskDataset(ImageDataset):
     def __init__(self, images_dir, masks_dir, n_channels: int, mask_suffix: str = '.tif',
                  augmentations=None, padding: bool = False, individual_padding=False, image_names=None,
-                 minmax_norm=False, percentile_norm=False):
+                 minmax_norm=False, percentile_norm=False, num_classes: int = 3, invert_images=False):
         """
         :param images_dir: Path of image directory
         :param masks_dir: Path of mask directory
@@ -204,12 +208,13 @@ class ImageMaskDataset(ImageDataset):
         :param minmax_norm: (Bool) Whether to apply minmax normalization to images (unique normalisation for each image)
         :param percentile_norm: (Bool) Whether to apply percentile normalization to images (unique normalisation for each image)
         """
+        self.num_classes = num_classes # To store the value passed in the config for mask processing
         self.mask_suffix = mask_suffix
         self.mask_names = []
         self.masks_dirs = masks_dir
         super().__init__(images_dir, n_channels=n_channels, padding=padding, individual_padding=individual_padding,
                          image_names=image_names, augmentations=augmentations, minmax_norm=minmax_norm,
-                         percentile_norm=percentile_norm)
+                         percentile_norm=percentile_norm, invert_images=invert_images)
 
         self.class_weighting = self.data_metrics['Class Weighting']
 
@@ -247,7 +252,7 @@ class ImageMaskDataset(ImageDataset):
     def extract_full_dataset_metrics(self):
         max_dimension = 0
         # loops through provided images and extracts the largest image dimension for use if padding is selected
-        class_counts = np.zeros((1, 2), dtype=int)
+        class_counts = np.zeros((1, self.num_classes), dtype=int) # to work with different models
         for file in self.mask_names:  # TODO: should this be changed to rectangular rather than square images?
             image = imageio.v2.imread(file)  # TODO: does this need updating?
             max_dimension = max(max_dimension, image.shape[0], image.shape[1])
@@ -255,25 +260,30 @@ class ImageMaskDataset(ImageDataset):
             class_counts[0, unique] += counts
 
         max_dimension = 32 * (max_dimension // 32 + 1)  # to be divisible by 32 as required by smp-UNet/ UNet++
-
-        class_weighting = np.sum(class_counts) / (2 * class_counts)  # calculates class weighting
+        class_weighting = np.sum(class_counts) / (class_counts.shape[1] * class_counts) # calculates class weighting
 
         if self.padding:
             rprint(f'[bold blue]Padding images to {max_dimension}x{max_dimension}[/bold blue]')
-
-        rprint(f'[bold blue]Class weighting is {class_weighting[:, 0]} for background, '
-               f'{class_weighting[:, 1]} for bands[/bold blue]')
-
+        # Dynamic  print depending  on the number of classes, class names can be updated accordingly
+        class_names = ['background', 'bands', 'wells'][:self.num_classes] 
+        print("Class weighting is " + ", ".join(f"{class_weighting.flat[i]:.8f} for {class_names[i]}" for i in range(self.num_classes)))
         return {'Max Dimension': max_dimension, 'Class Weighting': class_weighting}
 
     @staticmethod
-    def load_mask(filename):
+    def load_mask(filename, num_classes=3): # value of num_classes updates from config
         mask = np.array(Image.open(filename))
         # masks are specially prepared for easy reading, so there shouldn't the need for any further processing.
         # However, I have left a check here to indicate if something changes in the input data.
         unique = np.unique(mask)  # Acquire unique pixel values of the mask
-        if not all(unique == [0, 1]):
-            raise RuntimeError('Mask data does not match expected format.')
+        allowed = set(range(num_classes)) 
+        u = set(unique.tolist())
+
+        if not u.issubset(allowed): # This allows masks that have a missing class
+            raise RuntimeError(
+                f"Mask data does not match expected format. "
+                f"Found values {sorted(u)} in {filename}"
+            )
+        
 
         # Previous processing:
         # Final pixel value = Index of original pixel value in the list of unique pixel values
@@ -291,7 +301,7 @@ class ImageMaskDataset(ImageDataset):
             raise RuntimeError('Gel and mask images do not match - there is some mismatch in the data folders provided')
 
         img_array = self.load_image(filename=img_file)
-        mask_array = self.load_mask(mask_file)
+        mask_array = self.load_mask(mask_file, self.num_classes) # For loading masks
         orig_height, orig_width = img_array.shape[0], img_array.shape[1]
 
         assert img_array.shape == mask_array.shape, \

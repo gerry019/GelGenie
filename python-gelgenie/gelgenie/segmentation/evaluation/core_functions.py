@@ -18,16 +18,20 @@ from gelgenie.classical_tools.watershed_segmentation import watershed_analysis, 
 from gelgenie.segmentation.data_handling.dataloaders import ImageDataset, ImageMaskDataset
 from gelgenie.segmentation.helper_functions.general_functions import create_dir_if_empty, index_converter
 from gelgenie.segmentation.helper_functions.dice_score import multiclass_dice_coeff
+from gelgenie.segmentation.evaluation.gel_analysis import analyze_gel_with_proper_well_centric_approach
 
 import os
 from torch.utils.data import DataLoader
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import tifffile as tiff
 from scipy import ndimage as ndi
 from skimage.color import label2rgb
 from scipy.spatial.distance import directed_hausdorff
 from skimage.segmentation import find_boundaries
+from skimage.measure import label, regionprops_table
+from matplotlib.patches import Patch
 from tqdm import tqdm
 import math
 import imageio
@@ -39,6 +43,7 @@ from sklearn.metrics import confusion_matrix
 from PIL import Image
 
 
+
 # location of reference data, to be imported if required in other files
 ref_data_folder = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pardir, os.path.pardir, os.path.pardir)),
                                'data_analysis', 'ref_data')
@@ -47,15 +52,20 @@ ref_data_folder = os.path.join(os.path.abspath(os.path.join(__file__, os.path.pa
 def model_predict_and_process(model, image):
     """
     Runs the provided segmentation model and pre-processes it into an ordered mask for subsequent labelling.
+    Computes a per-pixel confidence map (max softmax probability)
     :param model: Pytorch segmentation model
     :param image: Input image (torch tensor)
     :return:
     """
     with torch.no_grad():
         mask = model(image)
-        one_hot = F.one_hot(mask.argmax(dim=1), 2).permute(0, 3, 1, 2).float()
+        num_classes = mask.shape[1] # Updated to fit multiclass segmentation 
+        probs = F.softmax(mask, dim=1) # Get softmax probability across the classes dimension
+        # Get the maximum value per pixel
+        conf_map = probs.max(dim=1)[0].squeeze().cpu().numpy() # Numpy conversion for saving
+        one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
         ordered_mask = one_hot.numpy().squeeze()
-    return mask, ordered_mask
+    return mask, ordered_mask, conf_map
 
 
 def model_multi_augment_predict_and_process(model, image):
@@ -76,10 +86,13 @@ def model_multi_augment_predict_and_process(model, image):
             mask += torch.flip(model(torch.flip(image, axes)), axes)
         mask /= (len(axes_combinations) + 1)
 
-    one_hot = F.one_hot(mask.argmax(dim=1), 2).permute(0, 3, 1, 2).float()
+    num_classes = mask.shape[1]  # For different models
+    probs = F.softmax(mask, dim=1) # softmax with normalization for classes
+    conf_map = probs.max(dim=1)[0].squeeze().cpu().numpy() 
+    one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
     ordered_mask = one_hot.numpy().squeeze()
 
-    return mask, ordered_mask
+    return mask, ordered_mask, conf_map
 
 
 def save_model_output(output_folder, model_name, image_name, labelled_image):
@@ -94,10 +107,78 @@ def save_model_output(output_folder, model_name, image_name, labelled_image):
     imageio.v2.imwrite(os.path.join(output_folder, model_name, '%s.png' % image_name), (labelled_image * 255).astype(np.uint8))
 
 
-def save_segmentation_map(output_folder, model_name, image_name, segmentation_map, positive_pixel_colour=(163, 106, 13)):
+def save_segmentation_map(output_folder, model_name, image_name, segmentation_map, confidence_map=None, band_colour=(163, 106, 13), well_colour= (0, 255,0)):
 
     if len(segmentation_map.shape) == 3:
         segmentation_map = segmentation_map.argmax(axis=0)
+
+    # Saving the mask produced with classes (argmax)
+    raw_mask_path = os.path.join(output_folder, model_name, f'{image_name}_raw_mask.tif')
+    tiff.imwrite(raw_mask_path, segmentation_map.astype(np.uint8))
+
+    # Save confidence map if provided
+    if confidence_map is not None: # Only  populated for ML methods
+        conf_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_map.tif')
+        tiff.imwrite(conf_path, confidence_map.astype(np.float32)) # For continous numbers
+    
+        # Updated version per pixel 
+        plt.figure(figsize=(8, 6))
+        plt.imshow(confidence_map, cmap='viridis', vmin=0, vmax=1)
+        plt.colorbar(label='Confidence')
+        plt.title(f'Confidence Map: {image_name}', fontsize=14)
+        plt.axis('off')
+        conf_viridis_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_viridis.png')
+        plt.savefig(conf_viridis_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    
+        # To visualise the confidence map ( per well/band)
+        conf_rgb = np.zeros((segmentation_map.shape[0], segmentation_map.shape[1], 3), dtype=np.uint8) 
+
+        # Loop through bands and wells
+        for cls_val in [1, 2]:  # 1=bands, 2=wells
+            mask_cls = (segmentation_map == cls_val)
+            if not np.any(mask_cls): # safety check
+                continue
+            # Label connected components within this class
+            labeled = label(mask_cls)
+
+            # The mean confidence for each labelled region (well/band)
+            props = regionprops_table(
+                labeled,
+                intensity_image=confidence_map,
+                properties=("label", "mean_intensity")
+            )
+
+            # Colors based on mean confidence
+            for region_label, mean_val in zip(props["label"], props["mean_intensity"]):
+                if mean_val > 0.8:
+                    color = (0, 255, 0)      # green = high confidence
+                elif mean_val > 0.5:
+                    color = (255, 255, 0)    # yellow = medium confidence
+                else:
+                    color = (255, 0, 0)      # red = low confidence
+                conf_rgb[labeled == region_label] = color
+
+        # Create figure with confidence overlay and legend
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.imshow(conf_rgb)
+        ax.axis('off')
+        ax.set_title(f'Confidence Map: {image_name}', fontsize=14, pad=10)
+
+        # Create legend patches
+        legend_elements = [
+            Patch(facecolor='green', label='High confidence (>80%)'),
+            Patch(facecolor='yellow', label='Medium confidence (50-80%)'),
+            Patch(facecolor='red', label='Low confidence (<50%)')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', framealpha=0.9, fontsize=10)
+        
+        plt.tight_layout() # spacing adjustment
+
+        # Saving the figure
+        conf_overlay_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_overlay.png')
+        plt.savefig(conf_overlay_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)        
 
     rgba_array = np.ones((segmentation_map.shape[0], segmentation_map.shape[1], 4), dtype=np.uint8)*255
 
@@ -105,8 +186,17 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
     alpha_channel = np.where(segmentation_map > 0, 255, 0)
     rgba_array[:, :, 3] = alpha_channel
 
-    # Set RGB channels for positive data
-    rgba_array[:, :, :3] = np.where(segmentation_map[..., None] > 0, positive_pixel_colour, 0)
+    # Set RGB channels - updated to use different colour for bands and well 
+    rgba_array[:, :, :3] = np.where(
+        (segmentation_map == 1)[..., None],  # Bands
+        band_colour,
+        np.where(
+            (segmentation_map == 2)[..., None],  # Wells
+            well_colour,
+            0  # Background
+        )
+    )
+
 
     # Create PIL Image from RGBA array
     image = Image.fromarray(rgba_array, 'RGBA')
@@ -115,7 +205,50 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
 
     return image
 
+def save_annotated_output(output_folder, model_name, image_name, rgb_labels, metrics_dict, num_classes: int = 3):
+    """
+    Saves  every segmentation output (image) with a small text box showing the primary performance metrics.
+    Only outputted for ML models (not classical methods).
+    """
+    # Pull latest metric values for this image (according to the model being tested, as multiple models can be run at once)
+    band_dice      = metrics_dict["Band Dice Score"][image_name][-1]
+    well_dice = metrics_dict["Well Dice Score"][image_name][-1] if metrics_dict["Well Dice Score"][image_name] else float('nan')
+    fg_f1          = metrics_dict["Foreground F1"][image_name][-1]
+    precision_fg   = metrics_dict["Precision"][image_name][-1]
+    recall_fg      = metrics_dict["Recall"][image_name][-1]
+    
+    # Prepare tiny text block
+    textstr = (
+        f"Model: {model_name}\n"
+        f"Band Dice: {band_dice:.2f}\n"
+        + (f"Well Dice: {well_dice:.2f}\n" if num_classes >= 3 else "")
+        + f"FG F1: {fg_f1:.2f}\n"
+        f"Prec: {precision_fg:.2f}\n"
+        f"Rec: {recall_fg:.2f}"
+    )
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.imshow(rgb_labels) # Same image used afterwards
+    ax.axis("off")
+    
+    # Style box is rounded rectangle, white, semi-transparent.
+    props = dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.75, edgecolor="black")
+    
+    # Bottom-right corner 
+    ax.text(
+        0.98, 0.02, textstr,
+        transform=ax.transAxes,
+        fontsize=8,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=props
+    )
+    
+    save_path = os.path.join(output_folder, model_name, f"{image_name}_annotated.png")
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
 
+    
 def plot_model_comparison(model_outputs, model_names, image_name, raw_image, output_folder, images_per_row,
                           double_indexing, comments=None, title_length_cutoff=20):
     """
@@ -218,7 +351,7 @@ def read_nnunet_inference_from_file(nfile):
 def segment_and_quantitate(models, model_names, input_folder, mask_folder, output_folder,
                            minmax_norm=False, percentile_norm=False, multi_augment=False, images_per_row=3,
                            run_classical_techniques=False, nnunet_models_and_folders=None,
-                           map_pixel_colour=(163, 106, 13)):
+                           band_colour=(163, 106, 13), well_colour=(0, 255, 0), num_classes: int = 3):
     """
 
     Segments images in input_folder using the selected models and computes their Dice score versus the ground truth labels.
@@ -237,7 +370,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
     :return: N/A (all outputs saved to file)
     """
     dataset = ImageMaskDataset(input_folder, mask_folder, 1, padding=False, individual_padding=True,
-                               minmax_norm=minmax_norm, percentile_norm=percentile_norm)
+                               minmax_norm=minmax_norm, percentile_norm=percentile_norm, num_classes=num_classes)
     dataloader = DataLoader(dataset, shuffle=False, batch_size=1, num_workers=0, pin_memory=True)
 
     if run_classical_techniques:
@@ -256,6 +389,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
     create_dir_if_empty(os.path.join(output_folder, 'method_comparison'))
     create_dir_if_empty(os.path.join(output_folder, 'metrics'))
+  
 
 
     double_indexing = True  # axes will have two indices rather than one
@@ -263,9 +397,21 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         double_indexing = False
 
     metrics_dict = {}
-    metrics = ['Dice Score', 'MultiClass Dice Score', 'True Negatives', 'False Positives', 'False Negatives', 'True Positives', 'Precision', 'Recall', 'Hausdorff Distance']
+    # Metrics that go through the zip loop (10 items, applies to ALL models, including classical methods)
+    metrics_for_zip = ['Foreground Dice Score', 'MultiClass Dice Score',
+                      'True Negatives', 'False Positives', 'False Negatives', 'True Positives', 
+                      'Precision', 'Recall', 'Foreground F1', 'Hausdorff Distance']
 
-    for metric in metrics:
+    # ALL metrics (for initialization and CSV output)
+    all_metrics = metrics_for_zip + [
+          'Band Dice Score', 'Well Dice Score',
+          'Band TP', 'Band FP', 'Band FN', 'Band TN',
+          'Band Precision', 'Band Recall', 'Band F1',
+          'Well TP', 'Well FP', 'Well FN', 'Well TN',
+          'Well Precision', 'Well Recall', 'Well F1']
+
+
+    for metric in all_metrics:
         metrics_dict[metric] = defaultdict(list)
 
     # preparing model outputs, including separation of different bands and labelling
@@ -287,9 +433,9 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         all_model_outputs = []
         display_dice_scores = []
 
-        gt_one_hot = F.one_hot(gt_mask.long(), 2).permute(0, 3, 1, 2).float()
 
         for model, mname in zip(models, model_names):
+            confidence_map = None # Initialise
 
             # classical methods
             if mname == 'watershed':
@@ -300,13 +446,20 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                 torch_one_hot, mask = read_nnunet_inference_from_file(os.path.join(model, image_name + '.tif'))
             else:  # standard ML models
                 if multi_augment:
-                    torch_mask, mask = model_multi_augment_predict_and_process(model, batch['image'])
+                    torch_mask, mask, confidence_map = model_multi_augment_predict_and_process(model, batch['image'])
                 else:
-                    torch_mask, mask = model_predict_and_process(model, batch['image'])
-                torch_one_hot = F.one_hot(torch_mask.argmax(dim=1), 2).permute(0, 3, 1, 2).float()
+                    torch_mask, mask, confidence_map = model_predict_and_process(model, batch['image'])
+                num_classes = torch_mask.shape[1] # For multi-class segmentation
+                torch_one_hot = F.one_hot(torch_mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
 
                 torch_one_hot = torch_one_hot[:, :, pad_h1:-pad_h2, pad_w1:-pad_w2]  # unpads model outputs
                 mask = mask[:, pad_h1:-pad_h2, pad_w1:-pad_w2]
+                # Unpad confidence map
+                if confidence_map is not None:
+                    confidence_map = confidence_map[pad_h1:-pad_h2, pad_w1:-pad_w2]
+
+            num_classes = torch_one_hot.shape[1] # To cater for different segmentation model output
+            gt_one_hot = F.one_hot(gt_mask.long(), num_classes).permute(0, 3, 1, 2).float()
 
             # dice score calculation
             dice_score = multiclass_dice_coeff(torch_one_hot[:, 1:, ...],
@@ -316,6 +469,21 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             dice_score_multi = multiclass_dice_coeff(torch_one_hot,
                                                      gt_one_hot,
                                                      reduce_batch_first=False).cpu().numpy()
+            
+            # Per-class dice scores (only for 3-class ML models)
+            if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
+                if num_classes >= 2:
+                    dice_band = multiclass_dice_coeff(torch_one_hot[:, 1:2, ...], # Batch , channel, height and width, only change is the channel
+                                                      gt_one_hot[:, 1:2, ...],
+                                                      reduce_batch_first=False).cpu().numpy()
+                                                    
+                    metrics_dict['Band Dice Score'][image_name].append(dice_band)
+                if num_classes >= 3:    
+                    dice_well = multiclass_dice_coeff(torch_one_hot[:, 2:3, ...],
+                                                      gt_one_hot[:, 2:3, ...],
+                                                      reduce_batch_first=False).cpu().numpy()
+                    metrics_dict['Well Dice Score'][image_name].append(dice_well)
+                
             display_dice_scores.append('Dice Score: %.3f' % dice_score)
 
             # confusion matrix calculation
@@ -327,14 +495,76 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             else:
                 c_mask = mask.argmax(axis=0).flatten()
 
-            # standard metrics to complement dice score
-            tn, fp, fn, tp = confusion_matrix(c_mask, gt_mask.numpy().squeeze().flatten()).ravel()
-            precision = tp/(tp+fp)
+            # Standard metrics to complement Dice score
+            # Convert multi-class to binary (foreground vs background)
+            c_mask_binary = (c_mask > 0).astype(int)
+            gt_mask_binary = (gt_mask.numpy().squeeze().flatten() > 0).astype(int)
+            tn, fp, fn, tp = confusion_matrix(
+                gt_mask_binary, c_mask_binary, labels=[0, 1]
+            ).ravel()
 
-            if tp == 0 and fn == 0:
-                recall = 0  # worst possible case
+            # Recall: Of all GT positives, how many did we find?
+            if tp + fn == 0:                 # no GT positives exist
+                recall = 1.0 if fp == 0 else 0.0   # false positive present so penalise
             else:
-                recall = tp/(tp+fn)
+                recall = tp / (tp + fn)
+
+            # Precision: Of all predictions, how many were correct?
+            if tp + fp == 0:                 # no predictions made
+                precision = 1.0 if fn == 0 else 0.0   # missed everything so penalise
+            else:
+                precision = tp / (tp + fp)
+
+            
+            # Foreground F1 score
+            if (precision + recall) == 0:
+                f1 = 0.0
+            else:
+                f1 = 2 * precision * recall / (precision + recall)
+
+            # Additional metrics output for multiclass prediction
+            if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
+                gt_labels = gt_mask.numpy().squeeze().astype(int).flatten()
+                pred_labels = mask.argmax(axis=0).flatten()
+    
+                classes_to_eval = [(1, "Band")]
+                if num_classes >= 3:
+                    classes_to_eval.append((2, "Well"))
+
+                for cls_id, cls_name in classes_to_eval:
+                    gt_binary   = (gt_labels == cls_id).astype(int)
+                    pred_binary = (pred_labels == cls_id).astype(int)
+                    tn_cls, fp_cls, fn_cls, tp_cls = confusion_matrix(
+                        gt_binary, pred_binary, labels=[0, 1]
+                    ).ravel()
+
+                    # Recall
+                    if tp_cls + fn_cls == 0:          # no GT positives for this class
+                        recall_cls = 1.0 if fp_cls == 0 else 0.0
+                    else:
+                        recall_cls = tp_cls / (tp_cls + fn_cls)
+        
+                    # Precision
+                    if tp_cls + fp_cls == 0:          # no predicted positives
+                        precision_cls = 1.0 if fn_cls == 0 else 0.0
+                    else:
+                        precision_cls = tp_cls / (tp_cls + fp_cls)
+        
+                    # F1 score
+                    if (precision_cls + recall_cls) == 0:
+                        f1_cls = 0.0
+                    else:
+                        f1_cls = 2 * precision_cls * recall_cls / (precision_cls + recall_cls)
+        
+                    # Store metrics
+                    metrics_dict[f"{cls_name} TP"][image_name].append(tp_cls)
+                    metrics_dict[f"{cls_name} FP"][image_name].append(fp_cls)
+                    metrics_dict[f"{cls_name} FN"][image_name].append(fn_cls)
+                    metrics_dict[f"{cls_name} TN"][image_name].append(tn_cls)
+                    metrics_dict[f"{cls_name} Precision"][image_name].append(precision_cls)
+                    metrics_dict[f"{cls_name} Recall"][image_name].append(recall_cls)
+                    metrics_dict[f"{cls_name} F1"][image_name].append(f1_cls)
+
 
             # Hausdorff distance calculation here
             # Extract boundary points of segmentation maps
@@ -346,7 +576,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             d2 = directed_hausdorff(prediction_boundary, ground_truth_boundary)[0]
             hausdorff_distance = max(d1, d2)
 
-            for metric, value in zip(metrics, [dice_score, dice_score_multi, tn, fp, fn, tp, precision, recall, hausdorff_distance]):
+            for metric, value in zip(metrics_for_zip, [dice_score, dice_score_multi, tn, fp, fn, tp, precision, recall, f1, hausdorff_distance]):
                 metrics_dict[metric][image_name].append(value)
 
             # direct model plotting
@@ -361,8 +591,11 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
             all_model_outputs.append(rgb_labels)
             save_model_output(output_folder, mname, image_name, rgb_labels)
-            save_segmentation_map(output_folder, mname, image_name, mask, positive_pixel_colour=map_pixel_colour)
+            save_segmentation_map(output_folder, mname, image_name, mask, confidence_map=confidence_map, band_colour=band_colour, well_colour=well_colour)
 
+            if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
+                save_annotated_output(output_folder, mname, image_name, rgb_labels, metrics_dict, num_classes=num_classes)
+       
         gt_labels, _ = ndi.label(gt_one_hot.numpy().squeeze().argmax(axis=0))
         gt_rgb_labels = label2rgb(gt_labels, image=np_image)
 
@@ -372,7 +605,10 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                               images_per_row, double_indexing, comments=[''] + display_dice_scores)
 
     # combines and saves final dice score data into a table
-    for key, value in metrics_dict.items():
+    for key in all_metrics:
+        value = metrics_dict[key]
+        if not value or all(len(v) == 0 for v in value.values()):
+            continue # For metrics that are not included in the classical methods, skip that CSV
         pd_data = pd.DataFrame.from_dict(value, orient='index')
         pd_data.columns = model_names
         if len(pd_data) == 1: # this solves issues with computing mean when only one image is present
@@ -383,7 +619,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
 def segment_and_plot(models, model_names, input_folder, output_folder, minmax_norm=False, percentile_norm=False,
                      multi_augment=False, images_per_row=2, run_classical_techniques=False, nnunet_models_and_folders=None,
-                     map_pixel_colour=(163, 106, 13)):
+                     band_colour=(163, 106, 13), well_colour=(0, 255, 0), run_analysis=False, ladder_sizes_bp=None):
     """
     Segments images in input_folder using models and saves the output image and a quick comparison to the output folder.
     :param models: Pre-loaded pytorch segmentation models
@@ -397,6 +633,8 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
     :param run_classical_techniques: Set to true to also run watershed and multiotsu segmentation apart from selected models
     :param nnunet_models_and_folders: List of tuples containing (model name, folder location) for pre-computed nnunet results on the same dataset
     :param map_pixel_colour: Colour to use for positive pixels in the output segmentation map (tuple, RGB)
+    :param run_analysis: Set to true to run distance measurement analysis on segmentation masks
+    :param ladder_sizes_bp: Optional pre-specified ladder sizes (list of floats), otherwise prompts per image
     :return: N/A (all outputs saved to file)
     """
 
@@ -424,6 +662,11 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
 
     create_dir_if_empty(os.path.join(output_folder, 'method_comparison'))
 
+    # Track analysis results per model of success vs failed gel image post-segmentation analysis (distance and weight measurement) per imae
+    analysis_results = {}
+    if run_analysis:
+        analysis_results = {mname: {'successful': 0, 'failed': 0, 'log_lines': []} for mname in model_names}
+
     # preparing model outputs, including separation of different bands and labelling
     for im_index, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
 
@@ -441,6 +684,7 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
         all_model_outputs = []
 
         for model, mname in zip(models, model_names):
+            confidence_map = None # Initialise 
             # classical methods
             if mname == 'watershed':
                 _, mask = run_watershed(np_image, image_name, None)
@@ -450,10 +694,14 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
                 _, mask = read_nnunet_inference_from_file(os.path.join(model, image_name + '.tif'))
             else:
                 if multi_augment:
-                    _, mask = model_multi_augment_predict_and_process(model, batch['image'])
+                    _, mask, confidence_map = model_multi_augment_predict_and_process(model, batch['image'])
                 else:
-                    _, mask = model_predict_and_process(model, batch['image'])
+                    _, mask, confidence_map = model_predict_and_process(model, batch['image'])
                 mask = mask[:, pad_h1:-pad_h2, pad_w1:-pad_w2]
+                if confidence_map is not None: 
+                    #Same unpadding logic but for 1 channel
+                    confidence_map = confidence_map[pad_h1:-pad_h2, pad_w1:-pad_w2]
+
 
             # direct model plotting
             if mname == 'watershed':
@@ -466,7 +714,78 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
             rgb_labels = label2rgb(labels, image=np_image)
             all_model_outputs.append(rgb_labels)
             save_model_output(output_folder, mname, image_name, rgb_labels)
-            save_segmentation_map(output_folder, mname, image_name, mask, positive_pixel_colour=map_pixel_colour)
+            save_segmentation_map(output_folder, mname, image_name, mask,confidence_map=confidence_map, band_colour=(163, 106, 13), well_colour=(0, 255, 0))
+
+            if run_analysis:
+                # Get path to the raw mask
+                raw_mask_path = os.path.join(output_folder, mname, f'{image_name}_raw_mask.tif')
+
+                # Check if confidence map exists ( Theoretical string path and actual path)
+                conf_path = os.path.join(output_folder, mname, f'{image_name}_confidence_map.tif')
+                confidence_path = conf_path if os.path.exists(conf_path) else None 
+                
+                # Set up analysis output paths 
+                analysis_plot_path = os.path.join(output_folder, mname, f'{image_name}_analysis.png')
+                analysis_report_path = os.path.join(output_folder, mname, f'{image_name}_report.txt')
+                analysis_csv_path = os.path.join(output_folder, mname, f'{image_name}_distances.csv')
+                
+                print(f"\n>>> Running analysis on {image_name} (model: {mname})...")
+                
+                try:
+                    # Runring analysis
+                    results = analyze_gel_with_proper_well_centric_approach(
+                        segmap_path=raw_mask_path,
+                        confidence_path=confidence_path,
+                        ladder_lane_id=None,  # Auto-select
+                        ladder_sizes_bp=ladder_sizes_bp,  # Will prompt if None
+                        renumber_lanes=True,
+                        show_plot=False,  # Need to update to remove 
+                        save_plot_path=analysis_plot_path,
+                        save_report_path=analysis_report_path
+                    )
+                    
+                    # Save CSV if results available
+                    if results and results.get('distances'):
+                        df = pd.DataFrame(results['distances'])
+                        df['image_name'] = image_name
+                        df['model_name'] = mname
+                        df.to_csv(analysis_csv_path, index=False)
+                        analysis_results[mname]['successful'] += 1
+                        analysis_results[mname]['log_lines'].append(f"SUCCESS: {image_name}")
+                        print(f"Analysis complete: {len(results['distances'])} distance measurements saved")
+                    else:
+                        analysis_results[mname]['failed'] += 1
+                        analysis_results[mname]['log_lines'].append(f"FAILED: {image_name} - No distances found")
+                        print(f"Analysis completed but no distances found")
+                    
+                except Exception as e:
+                    analysis_results[mname]['failed'] += 1
+                    analysis_results[mname]['log_lines'].append(f"FAILED: {image_name} - {str(e)}")
+                    print(f" Analysis failed for {image_name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
 
         plot_model_comparison(all_model_outputs, model_names, image_name, np_image, output_folder,
                               images_per_row, double_indexing)
+
+    # Write analysis summary logs at the end
+    if run_analysis:
+        from datetime import datetime
+        for mname in model_names:
+            results = analysis_results[mname]
+            total_analyzed = results['successful'] + results['failed']
+            
+            if total_analyzed > 0:  # Only if analysis was run for this model
+                log_path = os.path.join(output_folder, mname, 'analysis_log.txt')
+                with open(log_path, 'w') as f:
+                    f.write(f"Gel Analysis Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write("="*60 + "\n\n")
+                    f.write(f"Model: {mname}\n")
+                    f.write(f"Total images: {total_analyzed}\n")
+                    f.write(f"Successful: {results['successful']}\n")
+                    f.write(f"Failed: {results['failed']}\n\n")
+                    f.write("Details:\n")
+                    f.write("-" * 20 + "\n")
+                    for line in results['log_lines']:
+                        f.write(line + "\n")
+                print(f"\n Analysis summary saved: {log_path}")
