@@ -23,7 +23,7 @@ from gelgenie.segmentation.helper_functions.general_functions import extract_ima
 
 def prep_train_val_dataloaders(dir_train_img, dir_train_mask, split_training_dataset, dir_val_img, dir_val_mask,
                                n_channels, val_percent, batch_size, num_workers,
-                               apply_augmentations, weak_augmentations, padding, individual_padding, minmax_norm):
+                               apply_augmentations, weak_augmentations, padding, individual_padding, minmax_norm, num_classes: int = 3, invert_images: bool = False):
     """
     Prepares a matched training and validation dataloader for training a segmentation model.
     :param dir_train_img: Path of directory of training set images
@@ -40,6 +40,7 @@ def prep_train_val_dataloaders(dir_train_img, dir_train_mask, split_training_dat
     :param padding: (Bool) Whether to apply padding to images and masks when loading training and validation images
     :param individual_padding (Bool) Whether to apply padding to images and masks individually (only batch size of 1 possible)
     :param minmax_norm: (Bool) Whether to apply minmax normalization to images (unique normalisation for each image)
+    :param num_classes: (int) Number of segmentation classes (e.g. 2 for background/bands, 3 for background/bands/wells)
     :return: Training dataloader, Validation dataloader, number of training images, number of validation images
     """
 
@@ -71,7 +72,7 @@ def prep_train_val_dataloaders(dir_train_img, dir_train_mask, split_training_dat
     train_set = ImageMaskDataset(dir_train_img, dir_train_mask, n_channels,
                                  augmentations=augmentations if apply_augmentations else None,
                                  padding=padding, individual_padding=individual_padding, image_names=train_image_names,
-                                 minmax_norm=minmax_norm)
+                                 minmax_norm=minmax_norm,  num_classes=num_classes, invert_images=invert_images)
 
     if len(dir_val_img) == 0:
         val_loader = None
@@ -79,7 +80,7 @@ def prep_train_val_dataloaders(dir_train_img, dir_train_mask, split_training_dat
     else:
         val_set = ImageMaskDataset(dir_val_img, dir_val_mask, n_channels,  # validation set enforced to not have extra padding (as will be the case at test time)
                                    augmentations=None, padding=False, individual_padding=True,
-                                   image_names=val_image_names, minmax_norm=minmax_norm)
+                                   image_names=val_image_names, minmax_norm=minmax_norm,  num_classes=num_classes, invert_images=invert_images)
         n_val = len(val_set)
         val_loader = DataLoader(val_set, shuffle=False, batch_size=1, num_workers=1, pin_memory=True)
 

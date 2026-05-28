@@ -81,8 +81,10 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
     :param optional_name: Optional name to append to output file
     :return: Numpy arrays of image, mask prediction, super-imposed mask and true mask
     """
-    # Custom colormap: black, red, green
-    colors = ['black', 'red', 'green']
+    # Custom colormap: black, red, green, depending if a 2 or 3 class model
+    num_classes = mask_pred.shape[0]
+    all_colors = ['black', 'red', 'green']
+    colors = all_colors[:num_classes]
     custom_cmap = ListedColormap(colors)
     
     n_channels = 1 if len(image.shape) == 2 else 3
@@ -109,14 +111,13 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
         for j in range(width):
             if mask_pred_array[i][j] == 1:  # class 1: bands
                 combi_mask_array[i][j] = [1, 0, 0]  # red
-            elif mask_pred_array[i][j] == 2:  # class 2: wells
+            elif num_classes > 2 and mask_pred_array[i][j] == 2:  # class 2: wells (3-class only)
                 combi_mask_array[i][j] = [0, 1, 0]  # green
             else:  # Background
                 if n_channels == 1:  # image_array [H,W] / grayscale
-                    combi_mask_array[i][j] = np.repeat(image_array[i][j], 3)  ## Copies grayscale value to RGB channels
+                    combi_mask_array[i][j] = np.repeat(image_array[i][j], 3)  # Copies grayscale value to RGB channels
                 elif n_channels == 3:  # image_array [H,W,C] / RGB
                     combi_mask_array[i][j] = image_array[i][j]  # Copies RGB channel values all at once
-
     fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(10, 5))
 
     if n_channels == 1:
@@ -125,14 +126,14 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
         axs[0].imshow(image_array)
 
     # Show class-index predictions with custom colormap (black, red, green)
-    axs[1].imshow(mask_pred_array, cmap=custom_cmap, vmin=0, vmax=2)
+    axs[1].imshow(mask_pred_array, cmap=custom_cmap, vmin=0, vmax=num_classes - 1)
     axs[1].set_title('Mask Prediction')
 
     axs[2].imshow(combi_mask_array)
     axs[2].set_title('Superimposed\nMask Prediction')
 
     # Show class-index ground truth with same custom colormap
-    axs[3].imshow(mask_true_array, cmap=custom_cmap, vmin=0, vmax=2)
+    axs[3].imshow(mask_true_array, cmap=custom_cmap, vmin=0, vmax=num_classes - 1)
     axs[3].set_title('True Mask')
 
     plt.setp(plt.gcf().get_axes(), xticks=[], yticks=[])  # remove ticks

@@ -16,7 +16,7 @@
 
 import rich_click as click
 import sys
-
+import toml
 
 def model_eval_load(exp_folder, eval_epoch):
     import toml
@@ -105,9 +105,10 @@ def segmentation_pipeline(model_and_epoch, model_folder, input_folder, output_fo
             print("Could not parse the provided ladder sizes. Hence,will prompt for these during analysis")
 
     if run_quant_analysis:
+        num_classes = toml.load(join(model_folder, experiment_names[0], 'config.toml'))['model']['classes']
         segment_and_quantitate(models, list(experiment_names), input_folder, mask_folder, output_folder,
                                multi_augment=multi_augment, run_classical_techniques=classical_analysis,
-                               band_colour=band_colour, well_colour=well_colour, nnunet_models_and_folders=add_map_from_file)
+                               band_colour=band_colour, well_colour=well_colour, nnunet_models_and_folders=add_map_from_file, num_classes=num_classes)
     else:
         segment_and_plot(models, list(experiment_names), input_folder, output_folder, multi_augment=multi_augment,
                          run_classical_techniques=classical_analysis, band_colour=band_colour, well_colour=well_colour,

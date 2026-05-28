@@ -195,6 +195,7 @@ class TrainingHandler:
             self.load_checkpoint(training_parameters['load_checkpoint'])
 
         # data setup
+        data_parameters['num_classes'] = model_parameters['classes'] # To be dynamic for models
         self.train_loader, self.val_loader, self.train_image_count, self.val_image_count = prep_train_val_dataloaders(
             **data_parameters)
 
@@ -502,28 +503,34 @@ class TrainingHandler:
                         ).cpu().numpy()
 
                         # Dice for class 2 (wells)
-                        dice_well = multiclass_dice_coeff(
-                            mask_pred[:, 2:3, ...], # Slicing for class 2 only
-                            mask_true[:, 2:3, ...],
-                            reduce_batch_first=False
-                        ).cpu().numpy()
+                        if self.net.n_classes >= 3:
+                            dice_well = multiclass_dice_coeff(
+                                mask_pred[:, 2:3, ...], # Slicing for class 2 only
+                                mask_true[:, 2:3, ...],
+                                reduce_batch_first=False
+                            ).cpu().numpy()
 
-                         # Simple average of band & well Dice
-                        dice_mean = 0.5 * (dice_band + dice_well)
-
+                            # Simple average of band & well Dice
+                            dice_mean = 0.5 * (dice_band + dice_well)
+                        else:
+                            dice_well = float('nan')
+                            dice_mean = dice_band
                         
                         # Pack everything for visualisation
                         dice_package = {
                             "Foreground_dice_score": float(dice_fg),
                             "Bands_dice_score": float(dice_band),
-                            "Wells_dice_score": float(dice_well),
+                         
                         }
+                        if self.net.n_classes >= 3:
+                            dice_package["Wells_dice_score"] = float(dice_well)
 
                         # Appending metrics
                         epoch_metrics['Dice Score'] += dice_fg       
                         epoch_metrics['Class 1 (Bands) Validation Dice score'] += dice_band
-                        epoch_metrics['Class 2 (Wells) Validation Dice score'] += dice_well
                         epoch_metrics['Foreground Validation Dice score mean'] += dice_mean
+                        if self.net.n_classes >= 3:
+                            epoch_metrics['Class 2 (Wells) Validation Dice score'] += dice_well
 
                        # Updated the score before the output for better debugging
                         current_score = dice_fg 
@@ -532,9 +539,10 @@ class TrainingHandler:
 
                     if debug_this:
                         # Convert tensor into float
+                        dice_well_str = f"{dice_well:.4f}" if self.net.n_classes >= 3 else "N/A"
                         rprint(f"[green]DEBUG: Loss {val_loss.item():.4f}, "
                             f"Dice_fg {dice_fg:.4f}, Dice_band {dice_band:.4f}, "
-                            f"Dice_well {dice_well:.4f}, Dice_mean {dice_mean:.4f}[/green]"); sys.stdout.flush()
+                            f"Dice_well {dice_well_str}, Dice_mean {dice_mean:.4f}[/green]"); sys.stdout.flush()
 
                 pbar.update(1)
                 pbar.set_postfix(**{'Dice score (batch)': current_score})
@@ -617,7 +625,12 @@ class TrainingHandler:
             if self.val_loader is None:
                 stat_plotting = [['Training Loss'], ['Learning Rate']]
             else:
-                stat_plotting = [['Training Loss','Validation Loss', 'Dice Score', 'Class 1 (Bands) Validation Dice score', 'Class 2 (Wells) Validation Dice score', 'Foreground Validation Dice score mean'], ['Learning Rate']]
+                metrics_to_plot = ['Training Loss', 'Validation Loss', 'Dice Score',
+                                  'Class 1 (Bands) Validation Dice score',
+                                  'Foreground Validation Dice score mean']
+                if self.net.n_classes >= 3:
+                    metrics_to_plot.append('Class 2 (Wells) Validation Dice score')
+                stat_plotting = [metrics_to_plot, ['Learning Rate']]
             if 'Dice Loss' in current_epoch_metrics and 'Cross-Entropy Loss' in current_epoch_metrics:
                 stat_plotting += [['Dice Loss', 'Cross-Entropy Loss']]
 
@@ -676,7 +689,6 @@ class TrainingHandler:
                     log_dict.update({
                         "Validation Dice": current_epoch_metrics["Dice Score"],
                         "Class 1 (Bands) Validation Dice score": current_epoch_metrics["Class 1 (Bands) Validation Dice score"],
-                        "Class 2 (Wells) Validation Dice score": current_epoch_metrics["Class 2 (Wells) Validation Dice score"],
                         "Foreground Validation Dice score mean": current_epoch_metrics["Foreground Validation Dice score mean"],
                         "Validation Loss": current_epoch_metrics["Validation Loss"],
                         "Validation Sample": {
@@ -688,6 +700,8 @@ class TrainingHandler:
                             },
                         },
                     })
+                    if self.net.n_classes >= 3:
+                        log_dict["Class 2 (Wells) Validation Dice score"] = current_epoch_metrics["Class 2 (Wells) Validation Dice score"]
 
                 # add optional metrics only if present
                 for optional_metric in ["Dice Loss", "Cross-Entropy Loss"]:

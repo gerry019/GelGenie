@@ -1,56 +1,14 @@
 import numpy as np
 import argparse
-import glob # For file matching
+import glob # For file matching patterns
 import pandas as pd
 from datetime import datetime
 import os
 import matplotlib.pyplot as plt
 from skimage.io import imread
 from skimage.measure import regionprops, label
-from scipy.spatial.distance import euclidean
 from matplotlib import patches # For drawing shapes
-
-
-# Core clustering (gelgenie code)
-def find_nearest_points(all_centroids, median_width):
-    """Find nearest neighbors for clustering)."""
-    nearest_centroid_indices = []
-    for self_index, sel_centroid in enumerate(all_centroids):
-        distance_y = np.array([a[0] - sel_centroid[0] for a in all_centroids])  # vertical
-        distance_x = np.array([a[1] - sel_centroid[1] for a in all_centroids])  # horizontal
-        # indices (only) of wells within half well-width horizontally 
-        valid_indices = np.where(np.abs(distance_x) < (median_width / 2))[0]
-        distances = np.sqrt(distance_y[valid_indices] ** 2 + distance_x[valid_indices] ** 2) # Eucladian (better for any misaligmnet)
-        if len(valid_indices) == 1:
-            nearest_point = self_index # itself
-        else:
-            # Sort by the eucladian distance
-            nearest_point = valid_indices[np.argsort(distances)[1]] # finds the second one, which is index 1 adter sorting as 0 would be itself
-        nearest_centroid_indices.append(nearest_point)
-    return nearest_centroid_indices
-
-def separate_into_columns(nearest_centroid_list):
-    """Group centroids into columns via 'friend-of-nearest-friend' linking."""
-    group_indices = []
-    for i, cent_friend in enumerate(nearest_centroid_list):
-        a_group = [i] # new group with current centroid
-        while cent_friend not in a_group:
-            a_group.append(cent_friend)
-            cent_friend = nearest_centroid_list[cent_friend]
-        group_indices.append(a_group)
-    # de-duplicate overlapping groups
-    idx = 0
-    while idx < len(group_indices):
-        current_array = group_indices[idx]
-        for j in range(idx + 1, len(group_indices)):
-            if any(item in current_array for item in group_indices[j]): # checks for overlap
-                current_array = list(set(current_array) | set(group_indices[j]))
-                group_indices[idx] = current_array
-                group_indices.pop(j)
-                idx -= 1
-                break
-        idx += 1
-    return group_indices
+import json
 
 
 # Well-centric analysis
@@ -60,9 +18,9 @@ class WellCentricLaneAnalyzer:
         segmap format: 2 = wells, 1 = bands 0 = background
         """
         print(f"Loading segmentation map: {segmap_path}")
-        self.segmap = imread(segmap_path)
+        self.segmap = imread(segmap_path) # Numpy array
 
-        # Load confidence map if provided
+        # Load confidence map if provided for reporting in csv file
         self.confidence_map = None
         if confidence_path and os.path.exists(confidence_path):
             self.confidence_map = imread(confidence_path).astype(np.float32)
@@ -70,136 +28,158 @@ class WellCentricLaneAnalyzer:
         else:
             print("No confidence map provided")
 
-        # storage
-        self.wells = []
+       # storage
+        self.wells = [] # From regionprops
         self.bands = []
-        self.well_groups = []
         self.extended_lanes = {}   # {lane_id: {..., 'bbox': (top,left,bottom,right), 'wells':[], 'bands':[]}} (dictionary)
-        self.complete_lanes = {}
-        self.incomplete_lanes = {}
-        self.distances = []
+        self.complete_lanes = {} # With bands
+        self.incomplete_lanes = {} # Without bands
+        self.distances = [] # Well to band
 
-        # params - reflect well width approach
-        self.median_well_width = None
-        self.horizontal_threshold = None
-        self.gel_height = self.segmap.shape[0]
+        # params
+        self.gel_height = self.segmap.shape[0]  # Used for lane bottom boundary when no well below
 
         # ladder
         self.ladder_lane_id = None
         self.band_size_bp_by_id = {}   # id(band) and size_bp (from interpolation)
         self.outside_ladder = []        # list of (lane_id, band) with NaN size
 
+        # filter info
+        self.well_filter_info = {}
+        self.band_filter_info = {}
+
+
         print(f"Loaded segmentation map: {self.segmap.shape}") # Size
         print(f"Unique labels: {np.unique(self.segmap)}") # Labels
 
-    # Step 1: Extract well and band regions
     def extract_wells_and_bands(self):
-        print("\n=== STEP 1: Extracting Wells and Bands ===")
+        print("\n=== Step 1: Extracting Wells and Bands ===")
+
+        # --- Wells ---
         wells_mask = (self.segmap == 2) # Binary mask
-        if np.any(wells_mask): # Check if any exist
-            wells_labeled = label(wells_mask)
-            self.wells = regionprops(wells_labeled) # Get region properties
-            print(f"Found {len(self.wells)} wells")
+        if np.any(wells_mask):
+            wells_labeled = label(wells_mask) # Check if any exist
+            all_wells = regionprops(wells_labeled) # Get region properties
+            wells_sorted = sorted(all_wells, key=lambda w: w.centroid[1])  # left to right
+            self.all_wells_unfiltered = wells_sorted
+
+            # Filter: remove wells < 0.00875% of total image area
+            total_image_area = self.segmap.shape[0] * self.segmap.shape[1]
+            min_well_area = 0.0000875 * total_image_area
+
+            self.wells = [w for w in wells_sorted if w.area >= min_well_area]
+
+            self.well_filter_info = { # Filter information
+                'total_image_area': float(total_image_area),
+                'threshold': float(min_well_area),
+                'threshold_percent': 0.00875,
+                'filtered_wells': [idx for idx, w in enumerate(wells_sorted, start=1) if w.area < min_well_area]
+            }
+
+            removed_wells = len(wells_sorted) - len(self.wells)
+            if removed_wells > 0:
+                print(f"   Filtered out {removed_wells} small wells (< 0.00875% of image area)")
+            print(f"   Found {len(self.wells)} wells (after filtering)")
+
         else:
-            print("No wells found (label=2)")
+            print("   No wells found (label=2)")
             return False
 
-        bands_mask = (self.segmap == 1) # Bands binary mask
-        if np.any(bands_mask): # Checks if any exist
+        # --- Bands --- (Same kind of filtering and region properties)
+        bands_mask = (self.segmap == 1)
+        if np.any(bands_mask):
             bands_labeled = label(bands_mask)
-            self.bands = regionprops(bands_labeled) # Get region properties
-            print(f"Found {len(self.bands)} bands")
+            all_bands = regionprops(bands_labeled)
+
+            # Filter: remove bands < 0.0075% of total image area
+            min_band_area = 0.000075 * total_image_area
+
+            self.bands = [b for b in all_bands if b.area >= min_band_area]
+
+            self.band_filter_info = {
+                'total_image_area': float(total_image_area),
+                'threshold': float(min_band_area),
+                'threshold_percent': 0.0075,
+                'filtered_bands': [b.label for b in all_bands if b.area < min_band_area]
+            }
+
+            removed_bands = len(all_bands) - len(self.bands)
+            if removed_bands > 0:
+                print(f"   Filtered out {removed_bands} small bands (< 0.0075% of image area)")
+
+            for band in self.bands:
+                band.id = band.label
+
+            print(f"   Found {len(self.bands)} bands (after filtering)")
+
         else:
-            print("No bands found (label=1)")
+            print("   No bands found (label=1)")
+
         return True
 
-    # Step 2: Analyze well width
-    def calculate_well_parameters(self):
-        print("\n === STEP 2: Analyzing Well Layout ===")
-        if len(self.wells) == 1: # For only one well scenario
-            print(" Only one well detected — treating as single lane.")
-            c = self.wells[0].centroid
-            self.median_well_width = self.segmap.shape[1]  # Treat the whole width as filler to avoid errors downstream
-            self.horizontal_threshold = self.median_well_width / 2
-            self.well_groups = [{
-                'group_id': 0,
-                'wells': [self.wells[0]],
-                'well_indices': [0],
-                'center_x': c[1], 'center_y': c[0],
-                'width': self.median_well_width,
-                'well_count': 1
-            }]
-            return True
 
-        if len(self.wells) < 1:
-            print(" No wells detected")
-            return False
-
-        # Use well widths between wells to check for any other
-        well_widths = [w.bbox[3] - w.bbox[1] for w in self.wells]  # width of each well
-        self.median_well_width = np.median(well_widths)
-        self.horizontal_threshold = self.median_well_width / 2  # using well width for threshold
-        print(f"   • Median well width: {self.median_well_width:.1f} px")
-        print(f"   • Horizontal threshold: {self.horizontal_threshold:.1f} px")
-        return True
-
-    # Step 3: Cluster wells into lane groups
     def cluster_wells_into_lane_groups(self):
-        print("\n === STEP 3: Grouping Wells Into Lane Clusters ===")
-        # Clusterning and columns based on wells
-        well_centroids = [w.centroid for w in self.wells]
-        nearest_indices = find_nearest_points(well_centroids, self.median_well_width)
-        well_groups = separate_into_columns(nearest_indices)
+        print("\n=== Step 2: One Well Per Lane ===")
 
         self.well_groups = []
-        for group_idx, well_indices in enumerate(well_groups):
-            if not well_indices: continue
-            group_wells = [self.wells[i] for i in well_indices]
-            centroids_array = np.array([w.centroid for w in group_wells])
-            cx = float(np.mean(centroids_array[:, 1])) # center x coordinate
-            cy = float(np.mean(centroids_array[:, 0])) # center y coordinate
-            min_x, max_x = np.min(centroids_array[:, 1]), np.max(centroids_array[:, 1]) # For the x coordinates
-            width = max(max_x - min_x, self.horizontal_threshold) # To ensure minimum width
-            self.well_groups.append({
-                'group_id': group_idx,
-                'wells': group_wells,
-                'well_indices': well_indices,
-                'center_x': cx, 'center_y': cy,
-                'width': width, 'well_count': len(group_wells)
+        for well_idx, well in enumerate(self.wells):
+            cx = float(well.centroid[1])
+            cy = float(well.centroid[0])
+            width = well.bbox[3] - well.bbox[1]
+
+            self.well_groups.append({  # Well/lane information
+                'lane_id': well_idx,
+                'wells': [well],
+                'well_indices': [well_idx],
+                'center_x': cx,
+                'center_y': cy,
+                'width': width,
+                'well_count': 1
             })
 
-        print(f"   Created {len(self.well_groups)} well groups.")
+        print(f"   Created {len(self.well_groups)} lane groups (1 well per lane).")
         return True
 
-    # Step 4: Build extended lane boxes from wells
+
     def create_extended_lanes_from_wells(self):
-        print("\n === STEP 4: Creating Extended Lane Boundaries ===")
+        print("\n=== Step 3: Creating Extended Lane Boundaries ===")
+
         self.extended_lanes = {}
         for group in self.well_groups:
-            gid = group['group_id']
+            lid = group['lane_id']
             gw = group['wells']
-            cx = group['center_x']
-            lane_half_width = max(group['width'] / 2, self.horizontal_threshold) # width
-            top = float(min(w.bbox[0] for w in gw))
-            bottom = float(self.gel_height) # not good for when there are two runs in one image
-            left_actual = float(min(w.bbox[1] for w in gw))
-            right_actual = float(max(w.bbox[3] for w in gw))
-            left = min(left_actual, cx - lane_half_width) # Most left point or center point minus half the group span (whichever is smaller)
-            right = max(right_actual, cx + lane_half_width)  # Most right point or center point plus half the group span (whichever is larger)
-            self.extended_lanes[gid] = {
-                'group_id': gid, 'wells': gw,
-                'center_x': cx, 'center_y': group['center_y'],
+
+            # Horizontal boundaries from well's own edges
+            left = float(min(w.bbox[1] for w in gw))
+            right = float(max(w.bbox[3] for w in gw))
+
+            # Top = bottom edge of the well
+            top = float(min(w.bbox[2] for w in gw))
+
+            # Bottom = top of the next well below that horizontally overlaps, or image bottom
+            wells_below = [w.bbox[0] for w in self.wells
+                           if w not in gw
+                           and w.bbox[0] > top
+                           and (w.bbox[1] < right and w.bbox[3] > left)]
+
+            bottom = float(min(wells_below)) if wells_below else float(self.gel_height)
+
+            self.extended_lanes[lid] = {
+                'lane_id': lid,
+                'wells': gw,
+                'center_x': group['center_x'],
+                'center_y': group['center_y'],
                 'bbox': (top, left, bottom, right),
-                'width': right - left, 'height': bottom - top,
                 'bands': []
             }
-        print(f"  Created {len(self.extended_lanes)} extended lanes.")
+
+        print(f"   Created {len(self.extended_lanes)} extended lanes.")
         return True
 
-    # Step 5: Assign bands to lanes by bounding box
+
     def assign_bands_to_extended_lanes(self):
-        print("\n === STEP 5: Assigning Bands to Extended Lanes ===")
-        assigned = set()
+        print("\n=== Step 4: Assigning Bands to Extended Lanes ===")
+        assigned = set() # Prevents bands being assigned to multiple lanes
         for lane_id, lane in self.extended_lanes.items():
             bbox = lane['bbox']  # (top, left, bottom, right)
             lane_bands = []
@@ -212,37 +192,31 @@ class WellCentricLaneAnalyzer:
             lane['bands'] = lane_bands
             print(f"   Lane {lane_id}: {len(lane['wells'])} wells → {len(lane_bands)} bands")
 
-        # classify
+        # classify lane id in lane dictionary
         self.complete_lanes = {lid: ln for lid, ln in self.extended_lanes.items() if ln['bands']}
         self.incomplete_lanes = {lid: ln for lid, ln in self.extended_lanes.items() if not ln['bands']}
         unassigned = len(self.bands) - len(assigned)
         if unassigned > 0:
             print(f"   Unassigned bands: {unassigned} (outside all lane boundaries)")
         return True
-
-    # ---- Step 5.5: Renumber ALL lanes left→right starting from 1 ----
+    
     def renumber_lanes_left_to_right(self):
         if not self.extended_lanes:
             return
-        # sort by left x of bbox - include ALL lanes (complete + incomplete)
+        # sort by left x of bbox. To include all lanes (complete + incomplete)
         sorted_items = sorted(self.extended_lanes.items(), key=lambda kv: kv[1]['bbox'][1])
-        old_to_new = {old_id: new_id+1 for new_id, (old_id, _) in enumerate(sorted_items)}  # Start from 1
+        old_to_new = {old_id: new_id+1 for new_id, (old_id, _) in enumerate(sorted_items)}
 
-        def remap_lanes_dict(d): # Used to update the existing dictionaries
-            return {old_to_new[k]: v for k, v in d.items()} 
+        self.extended_lanes = {old_to_new[k]: v for k, v in self.extended_lanes.items()}
+        self.complete_lanes = {old_to_new[k]: v for k, v in self.complete_lanes.items()}
+        self.incomplete_lanes = {old_to_new[k]: v for k, v in self.incomplete_lanes.items()}
 
-        self.extended_lanes = remap_lanes_dict(self.extended_lanes)
-        self.complete_lanes = remap_lanes_dict(self.complete_lanes)
-        self.incomplete_lanes = remap_lanes_dict(self.incomplete_lanes)
-
-        # update group_id and keep order-consistent
         for lid, lane in self.extended_lanes.items():
-            lane['group_id'] = lid
+            lane['lane_id'] = lid
 
-        print("\n   All lanes renumbered left→right (starting from 1).")
-
-    # Step 6: Auto-pick ladder AFTER renumbering from the complete lanes
+        print("\n   All lanes renumbered left to right (starting from 1).")
     def auto_select_ladder_lane(self):
+        # Auto-pick ladder after  renumbering from the complete lanes
         if self.complete_lanes and self.ladder_lane_id is None:
             self.ladder_lane_id = max(self.complete_lanes.keys(), key=lambda k: len(self.complete_lanes[k]['bands'])) # with the most bands ( can add more)
             print(f"   (Auto) selected ladder lane: {self.ladder_lane_id}")
@@ -252,7 +226,8 @@ class WellCentricLaneAnalyzer:
         """Per-lane origin for migration: mean of well centroids (y)."""
         return float(np.mean([w.centroid[0] for w in lane['wells']])) if lane['wells'] else 0.0
 
-    # Step 7- ladder migration and interpolation from pixels to bp
+
+    # Ladder migration and interpolation from pixels to bp
     def set_ladder_sizes_and_interpolate(self, ladder_sizes_bp=None):
         """
         Linear interpolation from ladder migration (px), size (bp)
@@ -260,6 +235,7 @@ class WellCentricLaneAnalyzer:
         - Stores results in self.band_size_bp_by_id[id(band)] = size_bp
         - Bands outside ladder range get NaN size (no extrapolation)
         """
+        print("\n=== Step 5: Ladder Interpolation (px to bp) ===")
         if self.ladder_lane_id is None or self.ladder_lane_id not in self.complete_lanes:
             print("No ladder lane available for interpolation.")
             return False
@@ -326,9 +302,9 @@ class WellCentricLaneAnalyzer:
                 print(f"   Lane {lane_id}: band centroid at x={bx:.1f}, y={by:.1f}")
         return True
 
-    # Step 8: Distances + print px & bp, maybe combine with previous one  
+    # Distances + print px & bp
     def calculate_distances_for_complete_lanes(self):
-        print("\n === STEP 7: Calculating Distances ===")
+        print("\n === STEP 6: Calculating Distances ===")
         if not self.complete_lanes:
             print(" No complete lanes for distance calculations")
             return False
@@ -397,10 +373,11 @@ class WellCentricLaneAnalyzer:
                     })
         return True
 
-    # Step 9: Simple visualization
+
+    # Simple visualization
     def create_visualization(self, save_path=None):
         """Create visualization with option to save instead of show if a path is provided"""
-        print("\n === STEP 8: Creating Visualization ===")
+        print("\n === STEP 7: Creating Visualization ===")
         fig, axes = plt.subplots(1, 3, figsize=(20, 8))
         colors = ['red', 'blue', 'green', 'purple', 'orange', 'brown', 'pink', 'cyan', 'lime', 'yellow']
 
@@ -475,6 +452,7 @@ class WellCentricLaneAnalyzer:
         else:
             plt.show()
 
+
     def save_detailed_report(self, save_path):
         """Generate and save a detailed text report"""
         report_lines = []
@@ -540,7 +518,7 @@ class WellCentricLaneAnalyzer:
                 report_lines.append(f"  Lane {lane_id} ({len(distances_in_lane)} measurements):")
 
                 for dist in distances_in_lane:
-                    w_idx, b_idx = dist['well_idx'] + 1, dist['band_idx'] + 1
+                    w_idx, b_idx = dist['well_idx'], dist['band_idx']
                     vertical_dist = dist['vertical']
                     size_bp = dist.get('size_bp')
 
@@ -552,7 +530,7 @@ class WellCentricLaneAnalyzer:
                         size_str = f", {int(round(size_bp))}bp"
                     else:
                         size_str = ""
-                    
+
                     # Output condifence
                     if well_conf is not None and band_conf is not None:
                         conf_str = f", conf: W={well_conf:.3f} B={band_conf:.3f}"
@@ -569,6 +547,7 @@ class WellCentricLaneAnalyzer:
         with open(save_path, 'w',encoding='utf-8') as f:
             f.write(report_text)
         print(f" Detailed report saved: {save_path}")
+
 
     # ---- Report ----
     def generate_report(self):
@@ -594,7 +573,6 @@ class WellCentricLaneAnalyzer:
             'outside_ladder_count': len(self.outside_ladder),
         }
 
-
 def analyze_gel_with_proper_well_centric_approach(
     segmap_path,
     confidence_path=None, 
@@ -610,7 +588,6 @@ def analyze_gel_with_proper_well_centric_approach(
     
     try:
         if not analyzer.extract_wells_and_bands(): return None
-        if not analyzer.calculate_well_parameters(): return None
         if not analyzer.cluster_wells_into_lane_groups(): return None
         if not analyzer.create_extended_lanes_from_wells(): return None
         if not analyzer.assign_bands_to_extended_lanes(): return None

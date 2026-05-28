@@ -61,7 +61,7 @@ def model_predict_and_process(model, image):
         mask = model(image)
         num_classes = mask.shape[1] # Updated to fit multiclass segmentation 
         probs = F.softmax(mask, dim=1) # Get softmax probability across the classes dimension
-        # Get the maximum value per pixel, no index 
+        # Get the maximum value per pixel
         conf_map = probs.max(dim=1)[0].squeeze().cpu().numpy() # Numpy conversion for saving
         one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
         ordered_mask = one_hot.numpy().squeeze()
@@ -86,7 +86,7 @@ def model_multi_augment_predict_and_process(model, image):
             mask += torch.flip(model(torch.flip(image, axes)), axes)
         mask /= (len(axes_combinations) + 1)
 
-    num_classes = mask.shape[1]  # For 3 class segmentation
+    num_classes = mask.shape[1]  # For different models
     probs = F.softmax(mask, dim=1) # softmax with normalization for classes
     conf_map = probs.max(dim=1)[0].squeeze().cpu().numpy() 
     one_hot = F.one_hot(mask.argmax(dim=1), num_classes).permute(0, 3, 1, 2).float()
@@ -117,7 +117,7 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
     tiff.imwrite(raw_mask_path, segmentation_map.astype(np.uint8))
 
     # Save confidence map if provided
-    if confidence_map is not None:
+    if confidence_map is not None: # Only  populated for ML methods
         conf_path = os.path.join(output_folder, model_name, f'{image_name}_confidence_map.tif')
         tiff.imwrite(conf_path, confidence_map.astype(np.float32)) # For continous numbers
     
@@ -205,14 +205,14 @@ def save_segmentation_map(output_folder, model_name, image_name, segmentation_ma
 
     return image
 
-def save_annotated_output(output_folder, model_name, image_name, rgb_labels, metrics_dict):
+def save_annotated_output(output_folder, model_name, image_name, rgb_labels, metrics_dict, num_classes: int = 3):
     """
     Saves  every segmentation output (image) with a small text box showing the primary performance metrics.
     Only outputted for ML models (not classical methods).
     """
     # Pull latest metric values for this image (according to the model being tested, as multiple models can be run at once)
     band_dice      = metrics_dict["Band Dice Score"][image_name][-1]
-    well_dice      = metrics_dict["Well Dice Score"][image_name][-1]
+    well_dice = metrics_dict["Well Dice Score"][image_name][-1] if metrics_dict["Well Dice Score"][image_name] else float('nan')
     fg_f1          = metrics_dict["Foreground F1"][image_name][-1]
     precision_fg   = metrics_dict["Precision"][image_name][-1]
     recall_fg      = metrics_dict["Recall"][image_name][-1]
@@ -221,8 +221,8 @@ def save_annotated_output(output_folder, model_name, image_name, rgb_labels, met
     textstr = (
         f"Model: {model_name}\n"
         f"Band Dice: {band_dice:.2f}\n"
-        f"Well Dice: {well_dice:.2f}\n"
-        f"FG F1: {fg_f1:.2f}\n"
+        + (f"Well Dice: {well_dice:.2f}\n" if num_classes >= 3 else "")
+        + f"FG F1: {fg_f1:.2f}\n"
         f"Prec: {precision_fg:.2f}\n"
         f"Rec: {recall_fg:.2f}"
     )
@@ -343,8 +343,7 @@ def read_nnunet_inference_from_file(nfile):
     # read image from file, convert to 1 channel segmentation format
     # pass on for dice score calculation and RGB labelling
     n_im = imageio.v2.imread(nfile)
-    # Hardcoded for 3 class-segmentation
-    torch_mask = F.one_hot(torch.tensor(n_im).long().unsqueeze(0), 3).permute(0, 3, 1, 2).float()
+    torch_mask = F.one_hot(torch.tensor(n_im).long().unsqueeze(0), 2).permute(0, 3, 1, 2).float()
 
     return torch_mask, n_im
 
@@ -352,7 +351,7 @@ def read_nnunet_inference_from_file(nfile):
 def segment_and_quantitate(models, model_names, input_folder, mask_folder, output_folder,
                            minmax_norm=False, percentile_norm=False, multi_augment=False, images_per_row=3,
                            run_classical_techniques=False, nnunet_models_and_folders=None,
-                           band_colour=(163, 106, 13), well_colour=(0, 255, 0)):
+                           band_colour=(163, 106, 13), well_colour=(0, 255, 0), num_classes: int = 3):
     """
 
     Segments images in input_folder using the selected models and computes their Dice score versus the ground truth labels.
@@ -371,7 +370,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
     :return: N/A (all outputs saved to file)
     """
     dataset = ImageMaskDataset(input_folder, mask_folder, 1, padding=False, individual_padding=True,
-                               minmax_norm=minmax_norm, percentile_norm=percentile_norm)
+                               minmax_norm=minmax_norm, percentile_norm=percentile_norm, num_classes=num_classes)
     dataloader = DataLoader(dataset, shuffle=False, batch_size=1, num_workers=0, pin_memory=True)
 
     if run_classical_techniques:
@@ -434,8 +433,6 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
         all_model_outputs = []
         display_dice_scores = []
 
-        num_classes = 3
-        gt_one_hot = F.one_hot(gt_mask.long(), num_classes).permute(0, 3, 1, 2).float()
 
         for model, mname in zip(models, model_names):
             confidence_map = None # Initialise
@@ -461,6 +458,9 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                 if confidence_map is not None:
                     confidence_map = confidence_map[pad_h1:-pad_h2, pad_w1:-pad_w2]
 
+            num_classes = torch_one_hot.shape[1] # To cater for different segmentation model output
+            gt_one_hot = F.one_hot(gt_mask.long(), num_classes).permute(0, 3, 1, 2).float()
+
             # dice score calculation
             dice_score = multiclass_dice_coeff(torch_one_hot[:, 1:, ...],
                                                gt_one_hot[:, 1:, ...],
@@ -472,20 +472,19 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             
             # Per-class dice scores (only for 3-class ML models)
             if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
-                dice_band = multiclass_dice_coeff(torch_one_hot[:, 1:2, ...],
-                                                  gt_one_hot[:, 1:2, ...],
-                                                  reduce_batch_first=False).cpu().numpy()
-                                                
-                dice_well = multiclass_dice_coeff(torch_one_hot[:, 2:3, ...],
-                                                  gt_one_hot[:, 2:3, ...],
-                                                  reduce_batch_first=False).cpu().numpy()
+                if num_classes >= 2:
+                    dice_band = multiclass_dice_coeff(torch_one_hot[:, 1:2, ...], # Batch , channel, height and width, only change is the channel
+                                                      gt_one_hot[:, 1:2, ...],
+                                                      reduce_batch_first=False).cpu().numpy()
+                                                    
+                    metrics_dict['Band Dice Score'][image_name].append(dice_band)
+                if num_classes >= 3:    
+                    dice_well = multiclass_dice_coeff(torch_one_hot[:, 2:3, ...],
+                                                      gt_one_hot[:, 2:3, ...],
+                                                      reduce_batch_first=False).cpu().numpy()
+                    metrics_dict['Well Dice Score'][image_name].append(dice_well)
                 
-                # Store per-class dice immediately
-                metrics_dict['Band Dice Score'][image_name].append(dice_band)
-                metrics_dict['Well Dice Score'][image_name].append(dice_well)
             display_dice_scores.append('Dice Score: %.3f' % dice_score)
-
-
 
             # confusion matrix calculation
             if mname == 'watershed':
@@ -528,7 +527,11 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
                 gt_labels = gt_mask.numpy().squeeze().astype(int).flatten()
                 pred_labels = mask.argmax(axis=0).flatten()
     
-                for cls_id, cls_name in [(1, "Band"), (2, "Well")]:
+                classes_to_eval = [(1, "Band")]
+                if num_classes >= 3:
+                    classes_to_eval.append((2, "Well"))
+
+                for cls_id, cls_name in classes_to_eval:
                     gt_binary   = (gt_labels == cls_id).astype(int)
                     pred_binary = (pred_labels == cls_id).astype(int)
                     tn_cls, fp_cls, fn_cls, tp_cls = confusion_matrix(
@@ -591,7 +594,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
             save_segmentation_map(output_folder, mname, image_name, mask, confidence_map=confidence_map, band_colour=band_colour, well_colour=well_colour)
 
             if mname not in ['watershed', 'multiotsu'] and mname not in nnunet_model_names:
-                save_annotated_output(output_folder, mname, image_name, rgb_labels, metrics_dict)
+                save_annotated_output(output_folder, mname, image_name, rgb_labels, metrics_dict, num_classes=num_classes)
        
         gt_labels, _ = ndi.label(gt_one_hot.numpy().squeeze().argmax(axis=0))
         gt_rgb_labels = label2rgb(gt_labels, image=np_image)
