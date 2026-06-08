@@ -351,7 +351,7 @@ def read_nnunet_inference_from_file(nfile):
 def segment_and_quantitate(models, model_names, input_folder, mask_folder, output_folder,
                            minmax_norm=False, percentile_norm=False, multi_augment=False, images_per_row=3,
                            run_classical_techniques=False, nnunet_models_and_folders=None,
-                           band_colour=(163, 106, 13), well_colour=(0, 255, 0), num_classes: int = 3):
+                           band_colour=(163, 106, 13), well_colour=(0, 255, 0), num_classes: int = 3,  invert_images=False):
     """
 
     Segments images in input_folder using the selected models and computes their Dice score versus the ground truth labels.
@@ -370,7 +370,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
     :return: N/A (all outputs saved to file)
     """
     dataset = ImageMaskDataset(input_folder, mask_folder, 1, padding=False, individual_padding=True,
-                               minmax_norm=minmax_norm, percentile_norm=percentile_norm, num_classes=num_classes)
+                               minmax_norm=minmax_norm, percentile_norm=percentile_norm, num_classes=num_classes, invert_images=invert_images)
     dataloader = DataLoader(dataset, shuffle=False, batch_size=1, num_workers=0, pin_memory=True)
 
     if run_classical_techniques:
