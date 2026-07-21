@@ -103,11 +103,40 @@ A standalone Gradle project (its own wrapper) implementing a QuPath extension. K
 ```bash
 cd qupath-gelgenie
 ./gradlew build        # produces build/libs/qupath-gelgenie-<version>.jar (shadow/fat jar)
+./gradlew test         # runs the JUnit 5 suite (currently just GelGenieClassesTest)
 ```
 
 - Targets **QuPath 0.7.0** (`settings.gradle.kts`), via plugin
   `io.github.qupath.qupath-extension-settings` v0.2.1 and `com.gradleup.shadow` 8.3.5.
 - Extension coordinates: `group = io.github.mattaq31`, `version = 1.1.0`.
+- **JDK:** the toolchain defaults to JDK 25, which the local Gradle (8.14.2) can't parse — the build
+  dies with `IllegalArgumentException: 25.0.3` before compiling. Run under JDK 21/22, e.g.
+  `JAVA_HOME=<jdk22> ./gradlew build`. (`gradlew` may lack the executable bit; invoke as `sh ./gradlew`.)
+- **Tests** need no `build.gradle.kts` wiring: `testImplementation(libs.junit)` (JUnit 5.11.0) is
+  declared and `useJUnitPlatform()` + the toolchain come from the `qupath-conventions` plugin. Put
+  tests under `src/test/java/qupath/ext/gelgenie/...`.
+
+### Running QuPath + the extension together (IntelliJ dev setup)
+
+There are **two nested git repos**: this GelGenie fork (`gertrude_gelgenie_fork/`, tracks
+`qupath-gelgenie/`) and the untracked upstream **`qupath/`** clone (its own repo — never commit there).
+
+- **Open the GelGenie fork as the IntelliJ project** (`gertrude_gelgenie_fork/`, or `qupath-gelgenie/` —
+  IntelliJ finds the fork's `.git` at the parent). This makes the **fork** the VCS root, so all
+  extension commits/branches land in the right place. In Settings → Version Control, unregister the
+  nested `qupath/` root so the reference clone doesn't clutter changelists.
+- **Link both Gradle builds** in the Gradle tool window: `qupath-gelgenie/` (edit/test the extension)
+  and `qupath/` (launch). The `qupath/include-extra` file already `includeBuild`s `../qupath-gelgenie`,
+  so running `qupath-app`'s **`run`** task (it applies the `application` plugin, mainClass
+  `qupath.QuPath`) compiles the *live* extension source and starts QuPath with GelGenie loaded.
+  QuPath is a **multi-project** build, so in the Gradle tool window the task is nested under
+  `QuPath → qupath-app → Tasks → application → run` (not the top node) — easiest is a hand-made Gradle
+  Run Configuration: tasks `run` (or `:qupath-app:run`), Gradle project = the `qupath` build.
+  Set the **Gradle JVM to 21/22** (Settings → Build Tools → Gradle) or it dies with the JDK-25 error
+  above. Verified working: the run launches with **Extensions → GelGenie** present in the menu.
+- Do **not** invert the composite build (extension `includeBuild`ing `../qupath`): the extension's
+  settings resolve QuPath from Maven, so that route needs dependency substitution, collides two
+  `libs` version catalogs, and commits a dev-only local path — more fragile for no gain.
 
 ### Distribution
 
@@ -133,6 +162,12 @@ parameter through both components (models default to 2 for backward compatibilit
 - **Java:** package root `qupath.ext.gelgenie`; UI strings in `resources/.../ui/strings.properties`
   (i18n); FXML for layout; extension registered via
   `META-INF/services/qupath.lib.gui.extensions.QuPathExtension`.
+- **Segmentation classes:** `GelGenieClasses` (enum `BACKGROUND`/`GEL_BAND`/`WELL` in class-index
+  order, plus the standalone `GLOBAL_BACKGROUND` PathClass constant) is the **single source of truth**
+  for the 3-class names, indices and colours. Use `GEL_BAND.getPathClass()` to create annotations,
+  `GEL_BAND.matches(obj)` to test them, and `GelGenieClasses.classNames(n)` for translator class
+  lists — **do not re-introduce raw `"Gel Band"`/`"Well"` literals or colour ints** (they were
+  previously scattered across 7 files). Covered by `GelGenieClassesTest`.
 - **Git / authorship:** this is a multi-author project (Matthew + Gertrude + others). When
   integrating cross-author branches upstream, **use a regular merge, not squash**, so per-commit
   authorship is preserved. See `ROADMAP.md`.

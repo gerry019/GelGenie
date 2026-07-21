@@ -31,6 +31,7 @@ import org.bytedeco.opencv.opencv_core.Scalar;
 import org.opencv.core.CvType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.gelgenie.GelGenieClasses;
 import qupath.ext.gelgenie.djl_processing.*;
 import qupath.fx.dialogs.Dialogs;
 import qupath.imagej.processing.RoiLabeling;
@@ -39,7 +40,6 @@ import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.ImageServer;
 import qupath.lib.objects.PathObject;
 import qupath.lib.objects.PathObjects;
-import qupath.lib.objects.classes.PathClass;
 import qupath.lib.regions.Padding;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.interfaces.ROI;
@@ -143,7 +143,7 @@ public class ModelRunner {
         Collection<PathObject> annotations = runFullImageInference(model, useDJL, invertImage, dataMaxNorm);
         for (PathObject annot : annotations) {
             if (annot.getPathClass() == null)
-                annot.setPathClass(PathClass.fromString("Gel Band", 8000));
+                annot.setPathClass(GelGenieClasses.GEL_BAND.getPathClass());
         }
         addObjects(annotations);
 
@@ -376,8 +376,8 @@ public class ModelRunner {
                 for (int i = 0; i < request.getHeight(); i++) {
                     for (int j = 0; j < request.getWidth(); j++) {
                         // fill in 1 for each pixel that is either a band or a well in the respective matrix
-                        ((FloatIndexer) bandIndexer).put(i, j, maskOrig[i][j] == 1 ? 1 : 0);
-                        ((FloatIndexer) wellIndexer).put(i, j, maskOrig[i][j] == 2 ? 1 : 0);
+                        ((FloatIndexer) bandIndexer).put(i, j, maskOrig[i][j] == GelGenieClasses.GEL_BAND.getClassIndex() ? 1 : 0);
+                        ((FloatIndexer) wellIndexer).put(i, j, maskOrig[i][j] == GelGenieClasses.WELL.getClassIndex() ? 1 : 0);
                     }
                 }
                 // store band and well ROIs separately so they can be tagged with different colours before merging
@@ -386,10 +386,10 @@ public class ModelRunner {
 
                 // assign different colours and names to bands and wells
                 for (PathObject band : bandROIs) {
-                    band.setPathClass(PathClass.fromString("Gel Band", 10709517));
+                    band.setPathClass(GelGenieClasses.GEL_BAND.getPathClass());
                 }
                 for (PathObject well : wellROIs) {
-                    well.setPathClass(PathClass.fromString("Well", 3394611));
+                    well.setPathClass(GelGenieClasses.WELL.getPathClass());
                 }
 
                 // merge both collections and return

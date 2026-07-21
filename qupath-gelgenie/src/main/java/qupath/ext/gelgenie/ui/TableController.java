@@ -42,6 +42,7 @@ import org.bytedeco.opencv.global.opencv_core;
 import org.bytedeco.opencv.opencv_core.Mat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.gelgenie.GelGenieClasses;
 import qupath.ext.gelgenie.graphics.EmbeddedBarChart;
 import qupath.ext.gelgenie.tools.ImageTools;
 import qupath.ext.gelgenie.tools.LaneBandCompare;
@@ -417,7 +418,7 @@ public class TableController {
         double global_mean = 0.0;
         Collection<PathObject> annots = getAnnotationObjects();
         for (PathObject annot : annots) {
-            if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Global Background")) {
+            if (GelGenieClasses.GLOBAL_BACKGROUND.equals(annot.getPathClass())) {
                 double[] all_pixels = ImageTools.extractAnnotationPixels(annot, server, invertImage);
                 global_mean = global_mean + Arrays.stream(all_pixels).average().getAsDouble();
             }
@@ -467,7 +468,7 @@ public class TableController {
 
         for (PathObject annot : annots) {
             //  only act on annotations marked as bands
-            if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Gel Band")) {
+            if (GelGenieClasses.GEL_BAND.matches(annot)) {
                 double[] all_pixels = ImageTools.extractAnnotationPixels(annot, server, invertImage); // extracts a list of pixels matching the specific selected annotation
 
                 // computes intensity average

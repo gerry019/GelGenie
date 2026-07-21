@@ -22,6 +22,7 @@ import ai.djl.modality.cv.translator.BaseImageTranslator;
 import ai.djl.ndarray.NDList;
 import ai.djl.translate.Translator;
 import ai.djl.translate.TranslatorContext;
+import qupath.ext.gelgenie.GelGenieClasses;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -61,12 +62,7 @@ public class GelSegmentationTranslator extends BaseImageTranslator<CategoryMask>
     @Override
     public void prepare(TranslatorContext ctx) throws IOException {
         if (classes == null) { // usually reads this from file, in this case we can just hardcode it once
-            classes = new ArrayList<>();
-            classes.add("Background");
-            classes.add("Gel Band");
-            if (numClasses > 2) {
-                classes.add("Well");
-            }
+            classes = new ArrayList<>(GelGenieClasses.classNames(numClasses));
         }
     }
 

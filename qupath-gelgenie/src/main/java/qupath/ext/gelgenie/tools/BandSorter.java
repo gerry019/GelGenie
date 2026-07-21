@@ -16,6 +16,7 @@
 
 package qupath.ext.gelgenie.tools;
 
+import qupath.ext.gelgenie.GelGenieClasses;
 import qupath.lib.objects.PathObject;
 import qupath.lib.scripting.QP;
 
@@ -54,7 +55,7 @@ public class BandSorter {
             int wellIdCounter = 1;
             for (PathObject band: currentLaneBands) {
                 band.getMeasurementList().put("LaneID", laneIdCounter);
-                if (band.getPathClass() != null && band.getPathClass().getName().equals("Well")) {
+                if (GelGenieClasses.WELL.matches(band)) {
                     band.setName(String.format("L%d-%d", laneIdCounter, wellIdCounter));
                     band.getMeasurementList().put("WellID", wellIdCounter);
                     wellIdCounter++;
@@ -76,7 +77,7 @@ public class BandSorter {
     public static void LabelBands(){
         Collection<PathObject> actionableAnnotations = new ArrayList<>();
         for (PathObject annot : QP.getAnnotationObjects()) {
-            if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Gel Band")) {
+            if (GelGenieClasses.GEL_BAND.matches(annot)) {
                 actionableAnnotations.add(annot);
             }
         }

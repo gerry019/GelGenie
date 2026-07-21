@@ -16,7 +16,7 @@
 
 package qupath.ext.gelgenie.tools;
 
-import qupath.lib.common.ColorTools;
+import qupath.ext.gelgenie.GelGenieClasses;
 import qupath.lib.common.GeneralTools;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.servers.LabeledImageServer;
@@ -52,10 +52,10 @@ public class SegmentationMap {
         ImageData<BufferedImage> imageData = QP.getCurrentImageData();
         // Create an ImageServer where the pixels are derived only from annotations
         LabeledImageServer labelServer = new LabeledImageServer.Builder(imageData)
-                .backgroundLabel(0, ColorTools.WHITE)
+                .backgroundLabel(GelGenieClasses.BACKGROUND.getClassIndex(), GelGenieClasses.BACKGROUND.getColor())
                 .downsample(1.0)
-                .addLabel("Gel Band", 1)
-                .addLabel("Well", 2)
+                .addLabel(GelGenieClasses.GEL_BAND.getName(), GelGenieClasses.GEL_BAND.getClassIndex())
+                .addLabel(GelGenieClasses.WELL.getName(), GelGenieClasses.WELL.getClassIndex())
                 .multichannelOutput(false)
                 .build();
 
