@@ -17,6 +17,7 @@
 package qupath.ext.gelgenie.tools;
 
 import qupath.ext.gelgenie.GelGenieClasses;
+import qupath.ext.gelgenie.GelMeasurements;
 import qupath.lib.objects.PathObject;
 import qupath.lib.scripting.QP;
 
@@ -54,14 +55,14 @@ public class BandSorter {
             bandIdCounter = 1;
             int wellIdCounter = 1;
             for (PathObject band: currentLaneBands) {
-                band.getMeasurementList().put("LaneID", laneIdCounter);
+                band.getMeasurementList().put(GelMeasurements.LANE_ID, laneIdCounter);
                 if (GelGenieClasses.WELL.matches(band)) {
                     band.setName(String.format("L%d-%d", laneIdCounter, wellIdCounter));
-                    band.getMeasurementList().put("WellID", wellIdCounter);
+                    band.getMeasurementList().put(GelMeasurements.WELL_ID, wellIdCounter);
                     wellIdCounter++;
                 } else {
                     band.setName(String.format("L%d-%d", laneIdCounter, bandIdCounter));
-                    band.getMeasurementList().put("BandID", bandIdCounter);
+                    band.getMeasurementList().put(GelMeasurements.BAND_ID, bandIdCounter);
                     bandIdCounter++;
                 }
                 bands.remove(band);

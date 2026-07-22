@@ -43,6 +43,7 @@ import org.bytedeco.opencv.opencv_core.Mat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.gelgenie.GelGenieClasses;
+import qupath.ext.gelgenie.GelMeasurements;
 import qupath.ext.gelgenie.graphics.EmbeddedBarChart;
 import qupath.ext.gelgenie.tools.ImageTools;
 import qupath.ext.gelgenie.tools.LaneBandCompare;
@@ -505,16 +506,16 @@ public class TableController {
 
                 int bandID;
                 int laneID;
-                if (annot.getMeasurements().get("BandID") == null) {
+                if (annot.getMeasurements().get(GelMeasurements.BAND_ID) == null) {
                     bandID = 0;
                 } else {
-                    bandID = annot.getMeasurements().get("BandID").intValue();
+                    bandID = annot.getMeasurements().get(GelMeasurements.BAND_ID).intValue();
                 }
 
-                if (annot.getMeasurements().get("LaneID") == null) {
+                if (annot.getMeasurements().get(GelMeasurements.LANE_ID) == null) {
                     laneID = 0;
                 } else {
-                    laneID = annot.getMeasurements().get("LaneID").intValue();
+                    laneID = annot.getMeasurements().get(GelMeasurements.LANE_ID).intValue();
                 }
 
                 BandEntry curr_band = new BandEntry(bandID, laneID, annot.getName(), all_pixels.length,

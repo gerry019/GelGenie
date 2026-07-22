@@ -23,6 +23,8 @@ import javafx.scene.Node;
 import javafx.scene.SnapshotParameters;
 import javafx.scene.chart.*;
 import javafx.scene.image.WritableImage;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import qupath.fx.dialogs.FileChoosers;
 import qupath.lib.common.GeneralTools;
 import qupath.lib.images.servers.ServerTools;
@@ -40,6 +42,9 @@ import static qupath.lib.scripting.QP.getCurrentImageData;
  * Main class in charge of embedded bar charts in main GelGenie window and results table.
  */
 public class EmbeddedBarChart {
+
+    private static final Logger logger = LoggerFactory.getLogger(EmbeddedBarChart.class);
+
     public static ObservableList<XYChart.Series<String, Number>> plotBars(Collection<double[]> y_data,
                                                                           Collection<String> legendData,
                                                                           String[] labels) {
@@ -162,8 +167,8 @@ public class EmbeddedBarChart {
 
         try {
             ImageIO.write(SwingFXUtils.fromFXImage(image, null), "png", fileOutput);
-        } catch (IOException e) { //TODO: add a proper error message
-            e.printStackTrace();
+        } catch (IOException e) {
+            logger.error("Failed to save chart image", e);
         }
 
     }

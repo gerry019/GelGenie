@@ -97,10 +97,10 @@ public class ModelRunner {
         RegionRequest request = RegionRequest.createInstance(server, downsample);
 
         if(useDJL){
-            return runDJLModel(model, imageData, request, model.getName().contains("nnUNet"), invertImage, dataMaxNorm);
+            return runDJLModel(model, imageData, request, model.isNnUNet(), invertImage, dataMaxNorm);
         }
         else{
-            if (model.getName().contains("nnUNet")) {
+            if (model.isNnUNet()) {
                 Dialogs.showErrorMessage(resources.getString("ui.model-error.window-header"), resources.getString("error.model-issue"));
                 return null;
             }
@@ -168,10 +168,10 @@ public class ModelRunner {
         // Slice out the selected annotation at full resolution
         RegionRequest request = RegionRequest.createInstance(server.getPath(), 1.0, annotation.getROI());
         if(useDJL){
-            return runDJLModel(model, imageData, request, model.getName().contains("nnUNet"), invertImage, dataMaxNorm);
+            return runDJLModel(model, imageData, request, model.isNnUNet(), invertImage, dataMaxNorm);
         }
         else{
-            if (model.getName().contains("nnUNet")) {
+            if (model.isNnUNet()) {
                 Dialogs.showErrorMessage(resources.getString("ui.model-error.window-header"), resources.getString("error.model-issue"));
                 return null;
             }

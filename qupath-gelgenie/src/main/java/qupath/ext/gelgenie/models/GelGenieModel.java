@@ -86,6 +86,17 @@ public class GelGenieModel {
 
     public int getNumClasses() {return numClasses;}
 
+    /**
+     * Whether this is an nnU-Net model, which requires a different inference pipeline (no external
+     * padding) and is only supported via the DJL/TorchScript path.
+     * TODO: this is currently inferred from the model name; migrate to the {@code modelType} field
+     *  once the registry reliably populates it.
+     * @return true if this model is an nnU-Net model.
+     */
+    public boolean isNnUNet() {
+        return modelName != null && modelName.contains("nnUNet");
+    }
+
     public void setDummyModel(Boolean dummyModel) {this.dummyModel = dummyModel;}
 
     public void setAbbrvName(String abbrvName) {
