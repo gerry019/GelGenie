@@ -97,15 +97,15 @@ def visualise_segmentation(image, mask_pred, mask_true, epoch_number, dice_score
         width = image.size(dim=2)
         image_array = np.transpose(image.detach().squeeze().cpu().numpy(), (1, 2, 0))  # tensor [C,H,W] to array [H,W,C]
 
-    # --- Convert predicted/true masks to NumPy (multi-channel) ---
+    # Convert predicted/true masks to NumPy (multi-channel)
     mask_pred_array_multichannel = mask_pred.detach().squeeze().cpu().numpy()   # [C,H,W]
     mask_true_array_multichannel = mask_true.detach().squeeze().cpu().numpy()   # [C,H,W]
 
-    # --- Build class-index maps (0=bg, 1=bands, 2=wells) ---
+    # Build class-index maps (0=bg, 1=bands, 2=wells)
     mask_pred_array = np.argmax(mask_pred_array_multichannel, axis=0).astype(np.uint8)  # [H,W]
     mask_true_array = np.argmax(mask_true_array_multichannel, axis=0).astype(np.uint8)  # [H,W]
 
-    # --- Superimposed RGB (red=bands, green=wells, else original image) ---
+    # Superimposed RGB (red=bands, green=wells, else original image)
     combi_mask_array = np.zeros((height, width, 3))  # np array [H, W, C]
     for i in range(height):
         for j in range(width):

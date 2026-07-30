@@ -41,6 +41,7 @@ def prep_train_val_dataloaders(dir_train_img, dir_train_mask, split_training_dat
     :param individual_padding (Bool) Whether to apply padding to images and masks individually (only batch size of 1 possible)
     :param minmax_norm: (Bool) Whether to apply minmax normalization to images (unique normalisation for each image)
     :param num_classes: (int) Number of segmentation classes (e.g. 2 for background/bands, 3 for background/bands/wells)
+    :param invert_images: (Bool) Whether to invert pixel values at load time, for images with bright bands on a dark background
     :return: Training dataloader, Validation dataloader, number of training images, number of validation images
     """
 
