@@ -16,6 +16,7 @@
 
 package qupath.ext.gelgenie.tools;
 
+import qupath.ext.gelgenie.GelMeasurements;
 import qupath.lib.objects.PathObject;
 
 import java.util.Comparator;
@@ -30,24 +31,24 @@ public class LaneBandCompare implements Comparator<PathObject> {
     public int compare(PathObject a, PathObject b) {
 
         // defaults just in case lane/band ID are not set
-        if (a.getMeasurements().get("LaneID") == null){
+        if (a.getMeasurements().get(GelMeasurements.LANE_ID) == null){
             return 1;
         }
-        if (b.getMeasurements().get("LaneID") == null){
+        if (b.getMeasurements().get(GelMeasurements.LANE_ID) == null){
             return -1;
         }
 
-        if (a.getMeasurements().get("BandID") == null){
+        if (a.getMeasurements().get(GelMeasurements.BAND_ID) == null){
             return 1;
         }
-        if (b.getMeasurements().get("BandID") == null){
+        if (b.getMeasurements().get(GelMeasurements.BAND_ID) == null){
             return -1;
         }
 
-        int laneA = a.getMeasurements().get("LaneID").intValue();
-        int laneB = b.getMeasurements().get("LaneID").intValue();
-        int bandA = a.getMeasurements().get("BandID").intValue();
-        int bandB = b.getMeasurements().get("BandID").intValue();
+        int laneA = a.getMeasurements().get(GelMeasurements.LANE_ID).intValue();
+        int laneB = b.getMeasurements().get(GelMeasurements.LANE_ID).intValue();
+        int bandA = a.getMeasurements().get(GelMeasurements.BAND_ID).intValue();
+        int bandB = b.getMeasurements().get(GelMeasurements.BAND_ID).intValue();
 
         if (laneA < laneB) // lane ID takes priority
             return -1;

@@ -131,8 +131,8 @@ class ImageDataset(Dataset):
             image = (image.astype(np.float32) - min_pixel) / (max_pixel-min_pixel)
         elif self.percentile_norm:
             # calculate top 0.1 and bottom 0.1% of pixels to discard
-            min_pixel = np.percentile(image, 0.1)
-            max_pixel = np.percentile(image, 99.9)
+            min_pixel = np.percentile(image, 0.1).astype(np.float32)
+            max_pixel = np.percentile(image, 99.9).astype(np.float32)
             # Clip the image to the percentile range and normalize
             image = (np.clip(image, min_pixel, max_pixel).astype(np.float32) - min_pixel) / (max_pixel - min_pixel)
         else:

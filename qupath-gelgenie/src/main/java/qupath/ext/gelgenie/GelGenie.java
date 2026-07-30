@@ -50,7 +50,6 @@ public class GelGenie implements QuPathExtension, GitHubProject {
 
     @Override
     public void installExtension(QuPathGUI qupath) {
-        System.err.println("GelGenie.installExtension HIT");
         if (isInstalled) {
             logger.debug("{} is already installed", getName());
             return;

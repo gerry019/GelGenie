@@ -1,5 +1,10 @@
 group = "io.github.mattaq31"
-version = "1.1.0"
+
+// The version is normally driven by the release git tag (CI passes -Pversion=<tag without leading v>).
+// The literal here is only a fallback for local/dev builds when no -Pversion is supplied.
+val extensionVersion = providers.gradleProperty("version").getOrElse("1.1.0")
+version = extensionVersion
+
 plugins {
     // Support writing the extension in Groovy (remove this if you don't want to)
     groovy
@@ -13,7 +18,7 @@ plugins {
 qupathExtension {
     name = "qupath-extension-gelgenie"
     group = "io.github.mattaq31"
-    version = "1.1.0"
+    version = extensionVersion
     description = "QuPath extension to directly run and interface with GelGenie models."
     automaticModule = "io.github.mattaq31.extension.gelgenie"
 }

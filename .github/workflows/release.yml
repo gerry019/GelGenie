@@ -1,0 +1,95 @@
+name: Release (on v* tag)
+
+# Production release pipeline. Triggered by pushing a version tag (e.g. v2.0.0):
+#   1. builds the production jar with the version taken from the tag,
+#   2. runs the test suite,
+#   3. publishes a GitHub Release with the jar (+ javadoc/sources) attached,
+#   4. updates the root catalog.json and opens a PR to merge it into main (main is
+#      branch-protected, so it can't be pushed directly) so the QuPath Extension
+#      Manager sees the new release once the PR is merged.
+#
+# Cut a release with:  git tag v2.0.0 && git push origin v2.0.0
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # needed to create releases and push the catalog commit
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Strip the leading 'v' from the tag -> the authoritative version for this build.
+      - name: Derive version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: temurin
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test (version from tag)
+        working-directory: qupath-gelgenie
+        run: ./gradlew build -Pversion=${{ steps.version.outputs.version }} --stacktrace
+
+      - name: Create GitHub Release with jars
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            qupath-gelgenie/build/libs/qupath-extension-gelgenie-${{ steps.version.outputs.version }}.jar \
+            qupath-gelgenie/build/libs/qupath-extension-gelgenie-${{ steps.version.outputs.version }}-javadoc.jar \
+            qupath-gelgenie/build/libs/qupath-extension-gelgenie-${{ steps.version.outputs.version }}-sources.jar
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Update catalog.json
+        run: |
+          python automation_scripts/update_catalog.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --qupath-min "v0.7.0"
+
+      - name: Open pull request with updated catalog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- catalog.json; then
+            echo "catalog.json unchanged; nothing to open a PR for."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # main is branch-protected upstream, so land the catalog change via a
+          # reviewable PR rather than pushing directly. One branch per tag, force-updated
+          # so re-pushing the same tag refreshes the existing PR instead of erroring.
+          branch="catalog-update-${GITHUB_REF_NAME}"
+          git checkout -b "$branch"
+          git add catalog.json
+          git commit -m "Update catalog for ${GITHUB_REF_NAME}"
+          git push --force-with-lease origin "$branch"
+          # Reuse the PR if one is already open for this branch, else create it.
+          if [ -z "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "Update catalog for ${GITHUB_REF_NAME}" \
+              --body "Automated catalog update for release ${GITHUB_REF_NAME}. Adds the new release entry to \`catalog.json\` so the QuPath Extension Manager can resolve it."
+          else
+            echo "PR for $branch already open; force-push refreshed it."
+          fi

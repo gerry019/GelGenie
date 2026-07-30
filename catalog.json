@@ -16,7 +16,7 @@
           "optional_dependency_urls": null,
           "javadoc_urls": null,
           "version_range": {
-            "min": "v0.6.0",
+            "min": "v0.7.0",
             "max": null,
             "excludes": null
           }

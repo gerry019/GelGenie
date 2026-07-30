@@ -50,6 +50,7 @@ import org.controlsfx.control.action.Action;
 import org.controlsfx.control.action.ActionUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.gelgenie.GelGenieClasses;
 import qupath.ext.gelgenie.graphics.EmbeddedBarChart;
 import qupath.ext.gelgenie.models.GelGenieModel;
 import qupath.ext.gelgenie.models.ModelInterfacing;
@@ -317,7 +318,7 @@ public class UIController {
             if (selectedObjectCounter.numSelectedAnnotations.get() != 0) { // only trigger when annotations are selected
                 Collection<PathObject> actionableAnnotations = new ArrayList<>();
                 for (PathObject annot : getSelectedObjects()) {
-                    if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Gel Band")) {
+                    if (GelGenieClasses.GEL_BAND.matches(annot)) {
                         actionableAnnotations.add(annot); // histogram should only activate on bands not other objects
                     }
                 }
@@ -768,9 +769,7 @@ public class UIController {
             if (inferencePrefs.deletePreviousBandsPref()) { //removes all annotations before adding new ones
                 ArrayList<PathObject> removables = new ArrayList<>();
                 for (PathObject annot : getAnnotationObjects()) {
-                    var pathClass = PathClass.getInstance("Gel Band");
-                    var wellClass = PathClass.getInstance("Well");
-                    if (annot.getPathClass() != null && (annot.getPathClass().equals(pathClass) || annot.getPathClass().equals(wellClass))) {
+                    if (GelGenieClasses.GEL_BAND.matches(annot) || GelGenieClasses.WELL.matches(annot)) {
                         removables.add(annot);
                     }
                 }
@@ -785,8 +784,7 @@ public class UIController {
             }
             for (PathObject annot : newBands) {
                 if (annot.getPathClass() == null)
-                    annot.setPathClass(PathClass.fromString("Gel Band", 10709517));
-                // can use this converter to select the integer color from an RGB code: http://www.shodor.org/~efarrow/trunk/html/rgbint.html
+                    annot.setPathClass(GelGenieClasses.GEL_BAND.getPathClass());
             }
             addObjects(newBands);
             BandSorter.LabelBands(newBands);
@@ -806,7 +804,7 @@ public class UIController {
      * Marks the selected annotations as a gel band.
      */
     public void manualSetClass(){
-        PathClass gClass = PathClass.fromString("Gel Band", 10709517);
+        PathClass gClass = GelGenieClasses.GEL_BAND.getPathClass();
         for (PathObject annot : getSelectedObjects()) {
             annot.setPathClass(gClass);
         }
@@ -818,7 +816,7 @@ public class UIController {
     public void autoLabelBands(){
         Collection<PathObject> actionableAnnotations = new ArrayList<>();
         for (PathObject annot : getAnnotationObjects()) {
-            if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Gel Band")) {
+            if (GelGenieClasses.GEL_BAND.matches(annot)) {
                 actionableAnnotations.add(annot); // histogram should only activate on bands not other objects
             }
         }
@@ -831,7 +829,7 @@ public class UIController {
      */
     public void classifyFreeAnnotations(){
 
-        PathClass gClass = PathClass.fromString("Gel Band", 10709517);
+        PathClass gClass = GelGenieClasses.GEL_BAND.getPathClass();
         for (PathObject annot : getAnnotationObjects()) {
             if (annot.getPathClass() == null) {
                 annot.setPathClass(gClass);
@@ -848,7 +846,7 @@ public class UIController {
         ArrayList<PathObject> selectedBands = new ArrayList<>();
         if (genTableOnSelectedBands.isSelected()) {
             for (PathObject annot : getSelectedObjects()) {
-                if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Gel Band")) {
+                if (GelGenieClasses.GEL_BAND.matches(annot)) {
                     selectedBands.add(annot);
                 }
             }
@@ -871,8 +869,7 @@ public class UIController {
      */
     public void setGlobalBackgroundPatch() {
         PathObject annot = getSelectedObject();
-        PathClass gbClass = PathClass.fromString("Global Background", 906200);
-        annot.setPathClass(gbClass);
+        annot.setPathClass(GelGenieClasses.GLOBAL_BACKGROUND);
     }
 
     /**

@@ -16,6 +16,8 @@
 
 package qupath.ext.gelgenie.tools;
 
+import qupath.ext.gelgenie.GelGenieClasses;
+import qupath.ext.gelgenie.GelMeasurements;
 import qupath.lib.objects.PathObject;
 import qupath.lib.scripting.QP;
 
@@ -53,14 +55,14 @@ public class BandSorter {
             bandIdCounter = 1;
             int wellIdCounter = 1;
             for (PathObject band: currentLaneBands) {
-                band.getMeasurementList().put("LaneID", laneIdCounter);
-                if (band.getPathClass() != null && band.getPathClass().getName().equals("Well")) {
+                band.getMeasurementList().put(GelMeasurements.LANE_ID, laneIdCounter);
+                if (GelGenieClasses.WELL.matches(band)) {
                     band.setName(String.format("L%d-%d", laneIdCounter, wellIdCounter));
-                    band.getMeasurementList().put("WellID", wellIdCounter);
+                    band.getMeasurementList().put(GelMeasurements.WELL_ID, wellIdCounter);
                     wellIdCounter++;
                 } else {
                     band.setName(String.format("L%d-%d", laneIdCounter, bandIdCounter));
-                    band.getMeasurementList().put("BandID", bandIdCounter);
+                    band.getMeasurementList().put(GelMeasurements.BAND_ID, bandIdCounter);
                     bandIdCounter++;
                 }
                 bands.remove(band);
@@ -76,7 +78,7 @@ public class BandSorter {
     public static void LabelBands(){
         Collection<PathObject> actionableAnnotations = new ArrayList<>();
         for (PathObject annot : QP.getAnnotationObjects()) {
-            if (annot.getPathClass() != null && Objects.equals(annot.getPathClass().getName(), "Gel Band")) {
+            if (GelGenieClasses.GEL_BAND.matches(annot)) {
                 actionableAnnotations.add(annot);
             }
         }
