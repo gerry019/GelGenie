@@ -66,6 +66,9 @@ public class GelGenieModel {
     @SerializedName("num_classes")
     private int numClasses = 2; //defaults to 2 unless otherwise specified
 
+    @SerializedName("role")
+    private String role; // optional preset role tag (e.g. "accuracy"/"detection") - null if untagged
+
     private Boolean dummyModel = false;
 
     public String getName() {
@@ -85,6 +88,9 @@ public class GelGenieModel {
     public Boolean isDummyModel() {return dummyModel;}
 
     public int getNumClasses() {return numClasses;}
+
+    /** Optional preset-role tag from the registry (e.g. {@code "accuracy"}/{@code "detection"}), or null. */
+    public String getRole() {return role;}
 
     /**
      * Whether this is an nnU-Net model, which requires a different inference pipeline (no external

@@ -35,10 +35,11 @@ import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
 import javafx.geometry.Side;
-import javafx.scene.Node;
 import javafx.scene.chart.BarChart;
 import javafx.scene.chart.XYChart;
 import javafx.scene.control.*;
+import javafx.scene.layout.GridPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.text.Text;
@@ -46,6 +47,7 @@ import javafx.scene.text.TextAlignment;
 import javafx.scene.text.TextFlow;
 import javafx.scene.web.WebView;
 import org.controlsfx.control.PopOver;
+import org.controlsfx.control.SegmentedButton;
 import org.controlsfx.control.action.Action;
 import org.controlsfx.control.action.ActionUtils;
 import org.slf4j.Logger;
@@ -148,15 +150,15 @@ public class UIController {
     @FXML
     private ToggleButton toggleMove;
 
-    // CHECKBOXES HERE
+    // Run-option toggle tiles (2x2 grid)
     @FXML
-    private CheckBox runFullImage;
+    private ToggleButton runFullImage;
     @FXML
-    private CheckBox runSelected;
+    private ToggleButton runSelected;
     @FXML
-    private CheckBox deletePreviousBands;
+    private ToggleButton deletePreviousBands;
     @FXML
-    private CheckBox imageInversion;
+    private ToggleButton imageInversion;
     @FXML
     private CheckBox enableGlobalBackground;
     @FXML
@@ -206,6 +208,27 @@ public class UIController {
     @FXML
     private Tab modelTab;
 
+    // AI gel scan preset controls
+    @FXML
+    private SegmentedButton presetSegmented;
+    @FXML
+    private ToggleButton presetAccuracy;
+    @FXML
+    private ToggleButton presetDetection;
+    @FXML
+    private ToggleButton presetCustom;
+    @FXML
+    private HBox modelActions;
+    // the preset toggle currently applied - used to ignore repeat clicks on the same segment
+    private Toggle appliedPreset;
+
+    // Fallback model keys used when the registry has no model tagged with the matching role.
+    // TODO: point the detection fallback at the dedicated sharp-band model (or tag it role=detection in the registry).
+    private static final String FALLBACK_ACCURACY_MODEL = "GelGenie-Universal-Dec-2023";
+    private static final String FALLBACK_DETECTION_MODEL = "GelGenie-Universal-Dec-2023";
+
+    private ModelInterfacing.GelGenieModelCollection modelCollection;
+
     private final ObjectProperty<ImageData<BufferedImage>> imageDataProperty = new SimpleObjectProperty<>();
     private final static ResourceBundle resources = ResourceBundle.getBundle("qupath.ext.gelgenie.ui.strings");
     private final ObjectProperty<Boolean> pendingTask = new SimpleObjectProperty<>();
@@ -233,16 +256,17 @@ public class UIController {
         configureBarChart(); // sets up embedded bar chart
         configureAnnotationListener(); // sets up listener that triggers the appropriate functions when an annotation is selected/deselected
         getModelsPopulateList(); // sets up model dropdown menu
+        configurePresets(); // sets up the accuracy/detection/custom preset controls
         configureDevicesList(); // sets up hardware devices for computational speed-up
         configureAdditionalPersistentSettings(); // sets up miscellaneous persistent settings
         configureTabGroup(); // sets up tab pane
 
         if(qupath.getImageData() != null){
             if (getCurrentImageData().getProperty("Image Needs Inversion") == null){
-                imageInversion.setSelected(!checkGelImageInversion());
+                imageInversion.setSelected(checkGelImageInversion());
             }
             else{
-                imageInversion.setSelected(!(boolean) getCurrentImageData().getProperty("Image Needs Inversion"));
+                imageInversion.setSelected((boolean) getCurrentImageData().getProperty("Image Needs Inversion"));
             }
         }
 
@@ -266,10 +290,26 @@ public class UIController {
     This is the main functionality for resizing the tab pane (based on the internal VBox height).
      */
     private void resizeTabPane(Tab selectedTab) {
-        // Assuming that the content of the tab is VBox
-        double newHeight = 0;
-        for (Node titlePane : ((VBox) selectedTab.getContent()).getChildren()) {
-            newHeight += titlePane.getBoundsInParent().getHeight();
+        // Assuming that the content of the tab is VBox.
+        // Sum the *preferred* heights of the managed children rather than measuring laid-out child
+        // bounds: prefHeight is deterministic, so it doesn't read transient/stale bounds and doesn't
+        // creep downwards over successive calls. We sum the children directly (not content.prefHeight)
+        // because the content VBox has an explicit prefHeight set in FXML, which would otherwise win.
+        VBox content = (VBox) selectedTab.getContent();
+        content.applyCss();
+        double width = content.getWidth() > 0 ? content.getWidth() : -1;
+        var insets = content.getInsets();
+        double newHeight = insets.getTop() + insets.getBottom();
+        int managed = 0;
+        for (var child : content.getChildrenUnmodifiable()) {
+            if (!child.isManaged()) {
+                continue;
+            }
+            newHeight += child.prefHeight(width);
+            managed++;
+        }
+        if (managed > 1) {
+            newHeight += content.getSpacing() * (managed - 1);
         }
         mainTabGroup.setPrefHeight(newHeight + 40); // 40 is a buffer for tab headers and padding
     }
@@ -394,10 +434,10 @@ public class UIController {
             if (getCurrentImageData() != null) {
                 try {
                     if (getCurrentImageData().getProperty("Image Needs Inversion") == null){
-                        imageInversion.setSelected(!checkGelImageInversion());
+                        imageInversion.setSelected(checkGelImageInversion());
                     }
                     else{
-                        imageInversion.setSelected(!(boolean) getCurrentImageData().getProperty("Image Needs Inversion"));
+                        imageInversion.setSelected((boolean) getCurrentImageData().getProperty("Image Needs Inversion"));
                     }
                 } catch (IOException e) {
                     throw new RuntimeException(e);
@@ -405,13 +445,8 @@ public class UIController {
             }
         });
 
-        // updates the image data property if the checkbox value changes
-        imageInversion.selectedProperty().addListener(new ChangeListener<Boolean>() {
-            @Override
-            public void changed(ObservableValue<? extends Boolean> observable, Boolean oldValue, Boolean newValue) {
-                getCurrentImageData().setProperty("Image Needs Inversion", !newValue);
-            }
-        });
+        // NOTE: the "Dark bands" toggle no longer mutates the image itself - its value is read at
+        // inference time and simply fed to the model runner (see runBandInference).
     }
 
     /*
@@ -475,6 +510,7 @@ public class UIController {
      */
     private void getModelsPopulateList() {
         ModelInterfacing.GelGenieModelCollection models = ModelInterfacing.getModelCollection();
+        this.modelCollection = models; // retained so presets can resolve models by role
 
         // Prepares headers to visually sort the many models available from HuggingFace
         // Primary models are those that work best with most images
@@ -538,6 +574,102 @@ public class UIController {
     }
 
     /**
+     * Sets up the Accuracy/Detection/Custom preset segmented control that fronts the model catalogue.
+     * Accuracy and Detection resolve to a single registry-tagged model each; Custom hands control back
+     * to the model dropdown (revealed in the separate Config section).
+     */
+    private void configurePresets() {
+        // keep the run-button label in sync with the active model's capabilities (incl. Custom dropdown changes)
+        modelChoiceBox.getSelectionModel().selectedItemProperty().addListener((v, o, n) -> updateRunButtonText());
+
+        // a preset must always be selected - block deselection and react only to genuine changes
+        // (clicking the already-selected segment must be a no-op, otherwise the re-selection churn
+        //  re-runs applyPreset/resizeTabPane and nudges the layout downwards on every click)
+        presetSegmented.getToggleGroup().selectedToggleProperty().addListener((obs, oldToggle, newToggle) -> {
+            if (newToggle == null) {
+                if (oldToggle != null) oldToggle.setSelected(true); // prevent an all-off state
+                return;
+            }
+            if (newToggle == appliedPreset) {
+                return; // no real change - skip to avoid redundant relayout
+            }
+            appliedPreset = newToggle;
+            applyPreset();
+        });
+
+        presetAccuracy.setSelected(true); // default landing preset - fires applyPreset() via the listener above
+    }
+
+    /**
+     * Applies the currently selected preset: resolves + selects the backing model (presets) or unlocks
+     * the model dropdown (Custom), and shows/hides the Config pane accordingly.
+     */
+    private void applyPreset() {
+        boolean custom = presetCustom.isSelected();
+        boolean wasCustom = modelChoiceBox.isManaged(); // height only changes when the dropdown shows/hides
+        if (custom) {
+            modelChoiceBox.setDisable(false);
+        } else {
+            String role = presetDetection.isSelected() ? ModelInterfacing.ROLE_DETECTION : ModelInterfacing.ROLE_ACCURACY;
+            String fallbackKey = presetDetection.isSelected() ? FALLBACK_DETECTION_MODEL : FALLBACK_ACCURACY_MODEL;
+            GelGenieModel model = resolvePresetModel(role, fallbackKey);
+            if (model != null) {
+                modelChoiceBox.getSelectionModel().select(model);
+            }
+            modelChoiceBox.setDisable(true); // model is fixed by the preset
+        }
+        // the model dropdown is only shown for Custom; the download/info buttons stay visible for every
+        // preset so the relevant model can always be fetched
+        modelChoiceBox.setVisible(custom);
+        modelChoiceBox.setManaged(custom);
+
+        // slot the actions under the selected segment (full-width row for Custom, where the dropdown shows)
+        if (custom) {
+            GridPane.setColumnIndex(modelActions, 0);
+            GridPane.setColumnSpan(modelActions, 3);
+        } else {
+            GridPane.setColumnIndex(modelActions, presetDetection.isSelected() ? 1 : 0);
+            GridPane.setColumnSpan(modelActions, 1);
+        }
+
+        updateRunButtonText(); // preset may re-select the same model (no change event), so update explicitly
+
+        // only re-fit the tab when the row height actually changes (dropdown appears/disappears);
+        // resizing on every accuracy<->detection switch caused a small cumulative downshift
+        if (custom != wasCustom) {
+            Platform.runLater(() -> resizeTabPane(modelTab));
+        }
+    }
+
+    /**
+     * Resolves the model for a preset role, preferring a registry-tagged model and falling back to a
+     * known model key if none is tagged.
+     */
+    private GelGenieModel resolvePresetModel(String role, String fallbackKey) {
+        if (modelCollection == null) {
+            return null;
+        }
+        GelGenieModel model = modelCollection.getModelByRole(role);
+        if (model == null) {
+            model = modelCollection.getModels().get(fallbackKey);
+            if (model == null) {
+                logger.warn("No model tagged role '{}' and fallback '{}' not found in registry", role, fallbackKey);
+            }
+        }
+        return model;
+    }
+
+    /**
+     * Sets the run-button label to reflect the active model: "Detect bands and wells" for 3-class
+     * models, otherwise "Detect bands".
+     */
+    private void updateRunButtonText() {
+        GelGenieModel model = modelChoiceBox.getSelectionModel().getSelectedItem();
+        boolean threeClass = model != null && model.getNumClasses() >= 3;
+        runButton.setText(resources.getString(threeClass ? "ui.run" : "ui.run.bandsonly"));
+    }
+
+    /**
      * Downloads the selected model from HuggingFace.
      */
     public void downloadModel() {
@@ -559,10 +691,14 @@ public class UIController {
                 logger.error("Error downloading model", e);
                 return;
             }
-            showModelAvailableNotification(model.getName());
-            downloadButton.setDisable(true);
-            runButtonBinding.invalidate(); // fire an update to the binding, so the run button becomes available
-            infoButton.setDisable(false);
+            // UI updates must happen on the FX thread - doing this off-thread can throw and leave the
+            // run button stuck disabled (i.e. "downloaded but still can't run")
+            Platform.runLater(() -> {
+                showModelAvailableNotification(model.getName());
+                downloadButton.setDisable(true);
+                runButtonBinding.invalidate(); // fire an update to the binding, so the run button becomes available
+                infoButton.setDisable(false);
+            });
         });
     }
 
@@ -731,7 +867,7 @@ public class UIController {
         }
 
         ModelInferencePreferences inferencePrefs = new ModelInferencePreferences(runFullImage.isSelected(),
-                deletePreviousBands.isSelected(), !imageInversion.isSelected());
+                deletePreviousBands.isSelected(), imageInversion.isSelected());
 
         showRunningModelNotification();
         pendingTask.set(true);
@@ -855,13 +991,13 @@ public class UIController {
         TableRootCommand tableCommand = new TableRootCommand(qupath, "gelgenie_table",
                 "Data Table", true, enableGlobalBackground.isSelected(),
                 enableLocalBackground.isSelected(), enableRollingBackground.isSelected(),
-                localSensitivity.getValue(), rollingRadius.getValue(), !imageInversion.isSelected(), selectedBands);
+                localSensitivity.getValue(), rollingRadius.getValue(), imageInversion.isSelected(), selectedBands);
         tableCommand.run();
 
         // adds scriptable command for later execution
         addDataComputeAndExportToHistoryWorkflow(getCurrentImageData(), enableGlobalBackground.isSelected(),
                 enableLocalBackground.isSelected(), enableRollingBackground.isSelected(),
-                localSensitivity.getValue(), rollingRadius.getValue(), !imageInversion.isSelected());
+                localSensitivity.getValue(), rollingRadius.getValue(), imageInversion.isSelected());
     }
 
     /**
@@ -981,7 +1117,7 @@ public class UIController {
         Collection<String> annotNames = new ArrayList<>();
         for (PathObject annot : annotations) {
             ImageServer<BufferedImage> server = imageData.getServer();
-            double[] all_pixels = ImageTools.extractAnnotationPixels(annot, server, !imageInversion.isSelected()); // extracts a list of pixels matching the specific selected annotation
+            double[] all_pixels = ImageTools.extractAnnotationPixels(annot, server, imageInversion.isSelected()); // extracts a list of pixels matching the specific selected annotation
             dataList.add(all_pixels);
             annotNames.add(annot.getName());
             index++;

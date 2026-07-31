@@ -17,12 +17,15 @@
 <?import javafx.scene.control.ToggleButton?>
 <?import javafx.scene.control.Tooltip?>
 <?import javafx.scene.layout.AnchorPane?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.ColumnConstraints?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.VBox?>
 <?import javafx.scene.text.Font?>
 <?import javafx.scene.text.Text?>
 <?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.layout.Region?>
+<?import org.controlsfx.control.SegmentedButton?>
 
 <VBox maxHeight="-Infinity" maxWidth="-Infinity" minHeight="-Infinity" minWidth="-Infinity" prefWidth="370" stylesheets="@gelgeniestyles.css" AnchorPane.bottomAnchor="0.0" AnchorPane.leftAnchor="0.0" AnchorPane.rightAnchor="0.0" AnchorPane.topAnchor="0.0" xmlns="http://javafx.com/javafx/20.0.1" xmlns:fx="http://javafx.com/fxml/1" fx:controller="qupath.ext.gelgenie.ui.UIController">
     <TabPane fx:id="mainTabGroup" prefWidth="370.0" tabClosingPolicy="UNAVAILABLE">
@@ -42,74 +45,122 @@
                         <TitledPane animated="false" collapsible="false" text="%ui.processing.pane">
                             <VBox alignment="TOP_CENTER" styleClass="standard-spacing ">
                                 <children>
-                                    <!-- **********************Models**********************-->
-                                    <VBox alignment="CENTER">
+                                    <!-- **********************Model presets**********************-->
+                                    <VBox alignment="CENTER" styleClass="standard-spacing">
                                         <children>
-                                            <Label styleClass="regular" text="%ui.model" />
-                                            <HBox alignment="CENTER" styleClass="standard-spacing, standard-padding">
+                                            <Label styleClass="regular" text="%ui.scan.mode" />
+                                            <SegmentedButton fx:id="presetSegmented">
+                                                <buttons>
+                                                    <ToggleButton fx:id="presetAccuracy" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="110.0" text="%ui.scan.preset.accuracy">
+                                                        <graphic>
+                                                            <Text styleClass="preset-icon" textOrigin="CENTER">&#xf05b;</Text>
+                                                        </graphic>
+                                                        <tooltip>
+                                                            <Tooltip text="%ui.scan.preset.accuracy.tooltip" />
+                                                        </tooltip>
+                                                    </ToggleButton>
+                                                    <ToggleButton fx:id="presetDetection" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="110.0" text="%ui.scan.preset.detection">
+                                                        <graphic>
+                                                            <Text styleClass="preset-icon" textOrigin="CENTER">&#xf06e;</Text>
+                                                        </graphic>
+                                                        <tooltip>
+                                                            <Tooltip text="%ui.scan.preset.detection.tooltip" />
+                                                        </tooltip>
+                                                    </ToggleButton>
+                                                    <ToggleButton fx:id="presetCustom" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="110.0" text="%ui.scan.preset.custom">
+                                                        <graphic>
+                                                            <Text styleClass="preset-icon" textOrigin="CENTER">&#xf1de;</Text>
+                                                        </graphic>
+                                                        <tooltip>
+                                                            <Tooltip text="%ui.scan.preset.custom.tooltip" />
+                                                        </tooltip>
+                                                    </ToggleButton>
+                                                </buttons>
+                                            </SegmentedButton>
+                                            <!-- Model actions sit under the selected preset segment (full row for Custom, where the dropdown also appears) -->
+                                            <GridPane alignment="CENTER">
+                                                <columnConstraints>
+                                                    <ColumnConstraints halignment="CENTER" minWidth="110.0" prefWidth="110.0" />
+                                                    <ColumnConstraints halignment="CENTER" minWidth="110.0" prefWidth="110.0" />
+                                                    <ColumnConstraints halignment="CENTER" minWidth="110.0" prefWidth="110.0" />
+                                                </columnConstraints>
                                                 <children>
-                                                    <ComboBox id="deviceChoices" fx:id="modelChoiceBox" prefHeight="31.0" prefWidth="220.0">
-                                                        <tooltip>
-                                                            <Tooltip text="%ui.model.tooltip" />
-                                                        </tooltip>
-                                                    </ComboBox>
-                                                    <Button fx:id="downloadButton" mnemonicParsing="false" onAction="#downloadModel" prefHeight="31.0" prefWidth="39.0">
-                                                        <tooltip>
-                                                            <Tooltip text="%ui.model.download.tooltip" />
-                                                        </tooltip>
-                                                        <graphic>
-                                                            <Text styleClass="fa-icon"></Text>
-                                                        </graphic>
-                                                    </Button>
-                                                    <Button fx:id="infoButton" mnemonicParsing="false" onAction="#presentModelInfo" prefHeight="31.0" prefWidth="39.0">
-                                                        <tooltip>
-                                                            <Tooltip text="%ui.model.info.tooltip" />
-                                                        </tooltip>
-                                                        <graphic>
-                                                            <Text styleClass="fa-icon"></Text>
-                                                        </graphic>
-                                                    </Button>
+                                                    <HBox fx:id="modelActions" alignment="CENTER" styleClass="standard-spacing" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                                                        <children>
+                                                            <ComboBox fx:id="modelChoiceBox" managed="false" prefHeight="31.0" prefWidth="220.0" visible="false">
+                                                                <tooltip>
+                                                                    <Tooltip text="%ui.model.tooltip" />
+                                                                </tooltip>
+                                                            </ComboBox>
+                                                            <Button fx:id="downloadButton" mnemonicParsing="false" onAction="#downloadModel" prefHeight="31.0" prefWidth="39.0">
+                                                                <tooltip>
+                                                                    <Tooltip text="%ui.model.download.tooltip" />
+                                                                </tooltip>
+                                                                <graphic>
+                                                                    <Text styleClass="fa-icon">&#xf019;</Text>
+                                                                </graphic>
+                                                            </Button>
+                                                            <Button fx:id="infoButton" mnemonicParsing="false" onAction="#presentModelInfo" prefHeight="31.0" prefWidth="39.0">
+                                                                <tooltip>
+                                                                    <Tooltip text="%ui.model.info.tooltip" />
+                                                                </tooltip>
+                                                                <graphic>
+                                                                    <Text styleClass="fa-icon">&#xf05a;</Text>
+                                                                </graphic>
+                                                            </Button>
+                                                        </children>
+                                                    </HBox>
                                                 </children>
-                                            </HBox>
+                                            </GridPane>
                                         </children>
                                     </VBox>
                                     <!--**********************Run Options**********************-->
                                     <VBox alignment="CENTER">
-                                        <HBox alignment="BASELINE_RIGHT" styleClass="standard-spacing">
+                                        <Label styleClass="regular" text="%ui.model.runsettings">
+                                            <VBox.margin>
+                                                <Insets bottom="4.0" />
+                                            </VBox.margin>
+                                        </Label>
+                                        <GridPane alignment="CENTER" hgap="7.5" vgap="7.5">
+                                            <columnConstraints>
+                                                <ColumnConstraints halignment="CENTER" />
+                                                <ColumnConstraints halignment="CENTER" />
+                                            </columnConstraints>
                                             <children>
-                                                <CheckBox fx:id="runFullImage" mnemonicParsing="false" nodeOrientation="RIGHT_TO_LEFT" selected="true" text="%ui.model.runall" />
+                                                <ToggleButton fx:id="runFullImage" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="92.0" selected="true" styleClass="option-toggle" text="%ui.model.runall.short" GridPane.columnIndex="0" GridPane.rowIndex="0">
+                                                    <graphic>
+                                                        <Text styleClass="option-icon" textOrigin="CENTER">&#xf065;</Text>
+                                                    </graphic>
+                                                    <tooltip>
+                                                        <Tooltip showDelay="200ms" text="%ui.model.runall" />
+                                                    </tooltip>
+                                                </ToggleButton>
+                                                <ToggleButton fx:id="runSelected" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="92.0" styleClass="option-toggle" text="%ui.model.runselected.short" GridPane.columnIndex="1" GridPane.rowIndex="0">
+                                                    <graphic>
+                                                        <Text styleClass="option-icon" textOrigin="CENTER">&#xf125;</Text>
+                                                    </graphic>
+                                                    <tooltip>
+                                                        <Tooltip showDelay="200ms" text="%ui.model.runselected" />
+                                                    </tooltip>
+                                                </ToggleButton>
+                                                <ToggleButton fx:id="deletePreviousBands" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="92.0" styleClass="option-toggle" text="%ui.model.deleteprevious.short" GridPane.columnIndex="0" GridPane.rowIndex="1">
+                                                    <graphic>
+                                                        <Text styleClass="option-icon" textOrigin="CENTER">&#xf1f8;</Text>
+                                                    </graphic>
+                                                    <tooltip>
+                                                        <Tooltip showDelay="200ms" text="%ui.model.deleteprevious" />
+                                                    </tooltip>
+                                                </ToggleButton>
+                                                <ToggleButton fx:id="imageInversion" alignment="CENTER" contentDisplay="TOP" mnemonicParsing="false" prefWidth="92.0" styleClass="option-toggle" text="%ui.model.imageinversionstatus.short" GridPane.columnIndex="1" GridPane.rowIndex="1">
+                                                    <graphic>
+                                                        <Text styleClass="option-icon" textOrigin="CENTER">&#xf02a;</Text>
+                                                    </graphic>
+                                                    <tooltip>
+                                                        <Tooltip showDelay="200ms" text="%ui.model.imageinversionstatus" />
+                                                    </tooltip>
+                                                </ToggleButton>
                                             </children>
-                                            <padding>
-                                                <Insets right="90.0" />
-                                            </padding>
-                                        </HBox>
-
-                                        <HBox alignment="BASELINE_RIGHT" styleClass="standard-spacing">
-                                            <children>
-                                                <CheckBox fx:id="runSelected" alignment="CENTER" contentDisplay="RIGHT" mnemonicParsing="false" nodeOrientation="RIGHT_TO_LEFT" text="%ui.model.runselected" />
-                                            </children>
-                                            <padding>
-                                                <Insets right="90.0" />
-                                            </padding>
-                                        </HBox>
-
-                                        <HBox alignment="BASELINE_RIGHT" styleClass="standard-spacing">
-                                            <children>
-                                                <CheckBox fx:id="deletePreviousBands" mnemonicParsing="false" nodeOrientation="RIGHT_TO_LEFT" text="%ui.model.deleteprevious" />
-                                            </children>
-                                            <padding>
-                                                <Insets right="90.0" />
-                                            </padding>
-                                        </HBox>
-
-                                        <HBox alignment="BASELINE_RIGHT" styleClass="standard-spacing">
-                                            <children>
-                                                <CheckBox fx:id="imageInversion" mnemonicParsing="false" nodeOrientation="RIGHT_TO_LEFT" text="%ui.model.imageinversionstatus" selected="true"/>
-                                            </children>
-                                            <padding>
-                                                <Insets right="90.0" />
-                                            </padding>
-                                        </HBox>
+                                        </GridPane>
 
                                         <Region prefHeight="10" />
 
@@ -128,7 +179,10 @@
                                     <VBox alignment="CENTER">
                                         <HBox alignment="CENTER" styleClass="standard-spacing">
                                             <children>
-                                                <Button fx:id="runButton" disable="true" onAction="#runBandInference" prefHeight="31.0" prefWidth="252.0" text="%ui.run">
+                                                <Button fx:id="runButton" contentDisplay="LEFT" disable="true" graphicTextGap="8.0" onAction="#runBandInference" prefHeight="31.0" prefWidth="252.0" text="%ui.run">
+                                                    <graphic>
+                                                        <Text styleClass="fa-icon">&#xf0d0;</Text>
+                                                    </graphic>
                                                     <tooltip>
                                                         <Tooltip text="%ui.run.tooltip" />
                                                     </tooltip>
