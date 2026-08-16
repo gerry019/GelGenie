@@ -130,6 +130,8 @@ public class UIController {
     @FXML
     private Button autoLabelButton;
     @FXML
+    private Button repairSplitBandsButton;
+    @FXML
     private Button classButton;
     @FXML
     private Button autoClassButton;
@@ -498,6 +500,7 @@ public class UIController {
         exportMapButton.disableProperty().bind(imageDataProperty.isNull().or(pendingTask.isNotNull()));
         labelButton.disableProperty().bind(imageDataProperty.isNull().or(pendingTask.isNotNull()));
         autoLabelButton.disableProperty().bind(imageDataProperty.isNull().or(pendingTask.isNotNull()));
+        repairSplitBandsButton.disableProperty().bind(imageDataProperty.isNull().or(pendingTask.isNotNull()));
         classButton.disableProperty().bind(imageDataProperty.isNull().or(pendingTask.isNotNull()));
         autoClassButton.disableProperty().bind(imageDataProperty.isNull().or(pendingTask.isNotNull()));
 
@@ -952,11 +955,21 @@ public class UIController {
     public void autoLabelBands(){
         Collection<PathObject> actionableAnnotations = new ArrayList<>();
         for (PathObject annot : getAnnotationObjects()) {
-            if (GelGenieClasses.GEL_BAND.matches(annot)) {
-                actionableAnnotations.add(annot); // histogram should only activate on bands not other objects
+            // wells anchor lanes; bands are assigned to them; filtered bands are reconsidered
+            if (GelGenieClasses.isBandOrFiltered(annot) || GelGenieClasses.WELL.matches(annot)) {
+                actionableAnnotations.add(annot);
             }
         }
         BandSorter.LabelBands(actionableAnnotations);
+        fireHierarchyUpdate();
+    }
+
+    /**
+     * Post-processing step: merges horizontally-split fragments of a band within each labelled lane.
+     * Run after Auto-Label, since it works from the lane labels already assigned.
+     */
+    public void repairSplitBands(){
+        BandSorter.RepairSplitBands(getAnnotationObjects());
         fireHierarchyUpdate();
     }
 
