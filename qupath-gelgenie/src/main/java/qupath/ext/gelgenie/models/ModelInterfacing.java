@@ -45,6 +45,11 @@ public class ModelInterfacing {
     private static final Logger logger = LoggerFactory.getLogger(ModelInterfacing.class);
     private static GelGenieModelCollection cachedModelCollection;
 
+    /** Registry {@code role} tag resolved by the "Accuracy" preset. */
+    public static final String ROLE_ACCURACY = "accuracy";
+    /** Registry {@code role} tag resolved by the "Detection" preset. */
+    public static final String ROLE_DETECTION = "detection";
+
     /**
      * Loads a named gelgenie model from the available collection.
      * @param modelName: String name of the model to be loaded
@@ -162,6 +167,29 @@ public class ModelInterfacing {
 
         public void addModel(String name, GelGenieModel model) {
             models.put(name, model);
+        }
+
+        /**
+         * Resolves the single model tagged with the given preset {@code role} (e.g.
+         * {@link ModelInterfacing#ROLE_ACCURACY}). Only one model is expected per role; if several are
+         * tagged, the first is returned and a warning is logged.
+         * @param role the registry role tag to match
+         * @return the matching model, or null if no model carries that role
+         */
+        public GelGenieModel getModelByRole(String role) {
+            GelGenieModel match = null;
+            for (GelGenieModel model : models.values()) {
+                if (model != null && !model.isDummyModel() && role.equals(model.getRole())) {
+                    if (match == null) {
+                        match = model;
+                    } else {
+                        logger.warn("More than one model tagged with role '{}' - using the first ('{}')",
+                                role, match.getName());
+                        break;
+                    }
+                }
+            }
+            return match;
         }
     }
 

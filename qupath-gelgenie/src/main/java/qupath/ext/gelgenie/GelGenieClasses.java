@@ -46,6 +46,25 @@ public enum GelGenieClasses {
     /** Class name of the user-drawn global background-correction region (not a segmentation class). */
     public static final PathClass GLOBAL_BACKGROUND = PathClass.fromString("Global Background", 906200);
 
+    /**
+     * Class for the polyline lane connectors drawn by auto-labelling. Not a model-output class (so,
+     * like {@link #GLOBAL_BACKGROUND}, it is a static constant rather than an enum member); tagging
+     * the connectors lets each run replace the previous run's lines and keeps them out of the data table.
+     */
+    public static final PathClass LANE_CONNECTOR = PathClass.fromString("Lane Connector", ColorTools.packRGB(255, 105, 180));
+
+    /**
+     * Class for gel bands filtered out as too small during auto-labelling. Retained (not deleted) so
+     * they stay visible for inspection, but excluded from lane assignment and the data table.
+     */
+    public static final PathClass FILTERED_BAND = PathClass.fromString("Filtered Band", ColorTools.packRGB(150, 150, 150));
+
+    /** {@code true} if the object is a gel band, whether currently active or filtered-out. Null-safe. */
+    public static boolean isBandOrFiltered(PathObject pathObject) {
+        return GEL_BAND.matches(pathObject)
+                || (pathObject != null && FILTERED_BAND.equals(pathObject.getPathClass()));
+    }
+
     private final int classIndex;
     private final String className;
     private final int color;

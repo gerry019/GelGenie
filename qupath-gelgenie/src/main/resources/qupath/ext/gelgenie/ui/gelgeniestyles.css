@@ -15,6 +15,30 @@
     -fx-fill: -fx-text-base-color;
 }
 
+.preset-icon {
+    -fx-font-family: FontAwesome;
+    -fx-font-size: 22px;
+    -fx-fill: -fx-text-base-color;
+}
+
+.option-icon {
+    -fx-font-family: FontAwesome;
+    -fx-font-size: 16px;
+    -fx-fill: -fx-text-base-color;
+}
+
+/* Compact run-option toggle tiles - smaller than the preset trio */
+.option-toggle {
+    -fx-font-size: 11px;
+    -fx-padding: 4 6 4 6;
+    -fx-graphic-text-gap: 2;
+}
+
+/* Bold section headers (AI gel scan, Visualize & Edit, ...) */
+.titled-pane > .title {
+    -fx-font-weight: bold;
+}
+
 .tab .tab-label {
     -fx-font-weight: bold;
 }
