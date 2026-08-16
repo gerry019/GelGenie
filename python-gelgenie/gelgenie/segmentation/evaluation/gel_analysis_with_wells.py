@@ -2,37 +2,54 @@ import numpy as np
 import argparse
 import glob # For file matching patterns
 import pandas as pd
-import json
 import os
 from datetime import datetime
-import matplotlib.pyplot as plt
 from skimage.io import imread
 from skimage.measure import regionprops, label
 from skimage.morphology import convex_hull_image
 from matplotlib import patches # For drawing shapes
+import matplotlib
 import sys
+
+if 'COLAB_RELEASE_TAG' in os.environ:
+    matplotlib.use("Agg")
+else:
+    matplotlib.use("TkAgg")
+
+import matplotlib.pyplot as plt
+plt.ion()
 
 def console(msg=""):
     """Print directly to the real terminal, bypassing any stdout redirection."""
-    print(msg, file=sys.__stdout__, flush=True)
+    if 'COLAB_RELEASE_TAG' in os.environ:
+        print(msg, flush=True)
+    else:
+        print(msg, file=sys.__stdout__, flush=True)
+
+def log(msg=""):
+    """Print to both the log file (stdout) and the real terminal."""
+    print(msg)      # goes to the log file
+    console(msg)    # goes to the real terminal
 
 
 # Well-centric analysis
 class WellCentricLaneAnalyzer:
-    def __init__(self, segmap_path, confidence_path=None):
+    def __init__(self, segmap_path, confidence_path=None, use_area_filter=True, use_confidence_filter=True):
         """
         segmap format: 2 = wells, 1 = bands 0 = background
         """
-        print(f"Loading segmentation map: {segmap_path}")
+        log(f"Loading segmentation map: {segmap_path}")
         self.segmap = imread(segmap_path) # Numpy array
 
         # Load confidence map if provided for reporting in csv file
         self.confidence_map = None
+        self.use_area_filter = use_area_filter
+        self.use_confidence_filter = use_confidence_filter
         if confidence_path and os.path.exists(confidence_path):
             self.confidence_map = imread(confidence_path).astype(np.float32)  # To be used for calculations
-            print(f"Loaded confidence map: {confidence_path}")
+            log(f"Loaded confidence map: {confidence_path}")
         else:
-            print("No confidence map provided")
+            log("No confidence map provided")
 
        # storage
         self.wells = [] # From regionprops
@@ -55,14 +72,23 @@ class WellCentricLaneAnalyzer:
         # filter info
         self.well_filter_info = {}
         self.band_filter_info = {}
+        self.removed_low_confidence_wells = []
+        self.removed_low_confidence_bands = []
+        self.removed_small_wells = []
+        self.removed_small_bands = []
 
 
-        print(f"Loaded segmentation map: {self.segmap.shape}") # Size
-        print(f"Unique labels: {np.unique(self.segmap)}") # Labels
+        log(f"Loaded segmentation map: {self.segmap.shape}") # Size
+        log(f"Unique labels: {np.unique(self.segmap)}") # Labels
 
     def extract_wells_and_bands(self):
-        console("Step 1: Extracting Wells and Bands and applying filtering")
-        print("\n=== Step 1: Extracting Wells and Bands and applying filtering===")
+        log("\n=== Step 1: Extracting Wells and Bands and applying filtering===")
+        log(f"   Area filtering: {'ON' if self.use_area_filter else 'OFF'}")
+
+        if self.confidence_map is None:
+            log("   Confidence filtering: NOT APPLIED (no confidence map)")
+        else:
+            log(f"   Confidence filtering: {'ON' if self.use_confidence_filter else 'OFF'}")
 
         # Wells
         wells_mask = (self.segmap == 2) # Binary mask
@@ -76,26 +102,33 @@ class WellCentricLaneAnalyzer:
 
             # Filter 1: remove low-confidence wells (mean confidence < 0.8)
             confidence_threshold = 0.8
-            if self.confidence_map is not None:
+            if self.confidence_map is not None and self.use_confidence_filter:
                 confidence_filtered_wells = []
                 removed_low_confidence_wells = []
                 for well in wells_sorted:
                     coords = well.coords
-                    mean_conf = float(np.mean(self.confidence_map[coords[:, 0], coords[:, 1]]))
+                    mean_conf = float(np.mean(self.confidence_map[coords[:, 0], coords[:, 1]])) # Average for every coordinte of that closed component
                     if mean_conf >= confidence_threshold:
                         confidence_filtered_wells.append(well)
                     else:
                         removed_low_confidence_wells.append(well)
 
+                self.removed_low_confidence_wells = removed_low_confidence_wells
+
                 if removed_low_confidence_wells:
-                    print(f"   Filtered out {len(removed_low_confidence_wells)} low-confidence wells (< {confidence_threshold})")
+                    log(f"   Filtered out {len(removed_low_confidence_wells)} low-confidence wells (< {confidence_threshold})")
             else:
                 confidence_filtered_wells = wells_sorted
 
             # Filter 2: remove wells < 0.00875% of total image area
             min_well_area = 0.0000875 * total_image_area
 
-            self.wells = [w for w in confidence_filtered_wells if w.area >= min_well_area]
+            if self.use_area_filter:
+                self.removed_small_wells = [w for w in confidence_filtered_wells if w.area < min_well_area]
+                self.wells = [w for w in confidence_filtered_wells if w.area >= min_well_area]
+            else:
+                self.removed_small_wells = []
+                self.wells = confidence_filtered_wells
 
             self.well_filter_info = { # Filter information
                 'total_image_area': float(total_image_area),
@@ -106,14 +139,14 @@ class WellCentricLaneAnalyzer:
 
             removed_wells = len(confidence_filtered_wells) - len(self.wells)
             if removed_wells > 0:
-                print(f"   Filtered out {removed_wells} small wells (< 0.00875% of image area)")
-            print(f"   Found {len(self.wells)} wells (after filtering)")
+                log(f"   Filtered out {removed_wells} small wells (< 0.00875% of image area)")
 
-        else:
-            console("No wells found (label=2)")
-            print("   No wells found (label=2)")
-            return False
+            filtering_applied = self.use_area_filter or (self.use_confidence_filter and self.confidence_map is not None)
 
+            if filtering_applied:
+                log(f"   Found {len(self.wells)} wells (after filtering)")
+            else:
+                log(f"   Found {len(self.wells)} wells")
         # Bands
         bands_mask = (self.segmap == 1)
         if np.any(bands_mask):
@@ -123,7 +156,7 @@ class WellCentricLaneAnalyzer:
 
             # Filter 1: remove low-confidence bands (mean confidence < 0.8)
             confidence_threshold = 0.8
-            if self.confidence_map is not None:
+            if self.confidence_map is not None and self.use_confidence_filter:
                 confidence_filtered_bands = []
                 removed_low_confidence = []
                 for band in all_bands:
@@ -134,15 +167,22 @@ class WellCentricLaneAnalyzer:
                     else:
                         removed_low_confidence.append(band)
 
+                self.removed_low_confidence_bands = removed_low_confidence
+
                 if removed_low_confidence:
-                    print(f"   Filtered out {len(removed_low_confidence)} low-confidence bands (< {confidence_threshold})")
+                    log(f"   Filtered out {len(removed_low_confidence)} low-confidence bands (< {confidence_threshold})")
             else:
                 confidence_filtered_bands = all_bands
 
             # Filter 2: remove bands < 0.0075% of total image area
             min_band_area = 0.000075 * total_image_area
 
-            area_filtered_bands = [b for b in confidence_filtered_bands if b.area >= min_band_area]
+            if self.use_area_filter:
+                self.removed_small_bands = [b for b in confidence_filtered_bands if b.area < min_band_area]
+                area_filtered_bands = [b for b in confidence_filtered_bands if b.area >= min_band_area]
+            else:
+                self.removed_small_bands = []
+                area_filtered_bands = confidence_filtered_bands
 
             self.band_filter_info = {
                 'total_image_area': float(total_image_area),
@@ -153,10 +193,13 @@ class WellCentricLaneAnalyzer:
 
             removed_small = len(confidence_filtered_bands) - len(area_filtered_bands)
             if removed_small > 0:
-                print(f"   Filtered out {removed_small} small bands (< 0.0075% of image area)")
+                log(f"   Filtered out {removed_small} small bands (< 0.0075% of image area)")
 
             self.bands = area_filtered_bands
-            print(f"   Found {len(self.bands)} bands (after filtering)")
+            if filtering_applied:
+                log(f"   Found {len(self.bands)} bands (after filtering)")
+            else:
+                log(f"   Found {len(self.bands)} bands")
 
             filtered_mask = np.zeros_like(bands_mask, dtype=bool)
             for band in self.bands:
@@ -164,20 +207,19 @@ class WellCentricLaneAnalyzer:
             self.bands_mask = filtered_mask
 
             filtered_labels = label(self.bands_mask)
-            self.bands = list(regionprops(filtered_labels))
+            self.bands = list(regionprops(filtered_labels)) # Needed for more  processing
 
             for band in self.bands:
                 band.id = band.label
 
         else:
-            print("   No bands found (label=1)")
+            log("   No bands found (label=1)")
             self.bands_mask = np.zeros_like(self.segmap, dtype=bool)
 
         return True
 
     def cluster_wells_into_lane_groups(self):
-        console("Step 2: Clustering wells into lanes (One well per lane)")
-        print("\n=== Step 2: Clustering wells into lanes (One well per lane) ===")
+        log("\n=== Step 2: Clustering wells into lanes (One well per lane) ===")
 
         self.well_groups = []
         for well_idx, well in enumerate(self.wells):
@@ -195,13 +237,12 @@ class WellCentricLaneAnalyzer:
                 'well_count': 1 
             })
 
-        print(f"   Created {len(self.well_groups)} lane groups (1 well per lane).")
+        log(f"   Created {len(self.well_groups)} lane groups (1 well per lane).")
         return True
 
 
     def create_extended_lanes_from_wells(self):
-        console("Step 3: Creating Extended Lane Boundaries")
-        print("\n=== Step 3: Creating Extended Lane Boundaries ===")
+        log("\n=== Step 3: Creating Extended Lane Boundaries ===")
 
         self.extended_lanes = {}
         for group in self.well_groups:
@@ -232,13 +273,12 @@ class WellCentricLaneAnalyzer:
                 'bands': []
             }
 
-        print(f"   Created {len(self.extended_lanes)} extended lanes.")
+        log(f"   Created {len(self.extended_lanes)} extended lanes.")
         return True
 
 
     def assign_bands_to_extended_lanes(self):
-        console("Step 4: Assigning Bands to Extended Lanes")
-        print("\n=== Step 4: Assigning Bands to Extended Lanes ===")
+        log("\n=== Step 4: Assigning Bands to Extended Lanes ===")
         assigned = set() # Prevents bands being assigned to multiple lanes
         for lane_id, lane in self.extended_lanes.items():
             bbox = lane['bbox']  # (top, left, bottom, right)
@@ -257,7 +297,7 @@ class WellCentricLaneAnalyzer:
         self.incomplete_lanes = {lid: ln for lid, ln in self.extended_lanes.items() if not ln['bands']}
         unassigned = len(self.bands) - len(assigned)
         if unassigned > 0:
-            print(f"   Unassigned bands: {unassigned} (outside all lane boundaries)")
+            log(f"   Unassigned bands: {unassigned} (outside all lane boundaries)")
         return True
 
     def repair_split_bands(self):
@@ -266,8 +306,7 @@ class WellCentricLaneAnalyzer:
         find pairs of bands that are actually one physical band split into two
         mask fragments (side-by-side, similar y), and merge them via convex hull.
         """
-        console("Step 4b: Repairing Split Bands")
-        print("\n=== Step 4b: Repairing Split Bands ===")
+        log("\n=== Step 4b: Repairing Split Bands ===")
 
         def find_split_bands(bands):
             """
@@ -301,7 +340,7 @@ class WellCentricLaneAnalyzer:
             if not split_pairs:
                 continue
 
-            print(f"Lane {lane_id}: {len(split_pairs)} split band pair(s) detected")
+            log(f"Lane {lane_id}: {len(split_pairs)} split band pair(s) detected")
 
             # Create a mask containing only the current lane's bands
             lane_mask = np.zeros_like(self.bands_mask, dtype=bool)
@@ -349,8 +388,7 @@ class WellCentricLaneAnalyzer:
         for lid, lane in self.extended_lanes.items():
             lane['lane_id'] = lid
 
-        console("Lanes renumbered left to right")
-        print("\n   All lanes renumbered left to right (starting from 1).")
+        log("\n   All lanes renumbered left to right (starting from 1).")
 
     # Ladder sizes to  linear calibration, to use the well centroud and not the beginning of the lane
     def _lane_origin_y(self, lane):
@@ -358,7 +396,7 @@ class WellCentricLaneAnalyzer:
         return float(lane['wells'][0].centroid[0])
 
     def interpolate_size_local(self, m, ladder_migs_sorted, log_sizes_sorted):
-    
+
         n = len(ladder_migs_sorted)
 
         # Outside the calibrated range entirely - do not extrapolate
@@ -380,11 +418,9 @@ class WellCentricLaneAnalyzer:
         return float(10 ** log_size_est)
 
     def calibrate(self, ladder_sizes_bp=None, interactive=True):
-            console("Step 5: Ladder Calibration (local two-point interpolation)")
-            print(f"\n=== Step 5: Ladder Calibration (local two-point interpolation) ==="
+            log(f"\n=== Step 5: Ladder Calibration (local two-point interpolation) ===")
             if not self.complete_lanes:
-                console("No complete lanes available for calibration.")
-                print("No complete lanes available for calibration.")
+                log("No complete lanes available for calibration.")
                 self.ladder_calibrations = {}
                 self.lane_to_ladder = {}
                 return False
@@ -395,16 +431,14 @@ class WellCentricLaneAnalyzer:
 
             if not interactive:
                 if ladder_sizes_bp is None:
-                    console("Non-interactive mode requires ladder_sizes_bp to be provided. Skipping calibration.")
-                    print("Non-interactive mode requires ladder_sizes_bp to be provided. Skipping calibration.")
+                    log("Non-interactive mode requires ladder_sizes_bp to be provided. Skipping calibration.")
                     self.ladder_calibrations = {}
                     self.lane_to_ladder = {}
                     return False
                 ladder_ids = [auto_ladder_id]
-                console(f"Non-interactive mode: using auto-selected Lane {auto_ladder_id} with provided sizes.")
-                print(f"Non-interactive mode: using auto-selected Lane {auto_ladder_id} with provided sizes.")
+                log(f"Non-interactive mode: using auto-selected Lane {auto_ladder_id} with provided sizes.")
             else:
-                console("Use this ladder? (Y/N): ")
+                console(f"Use Lane {auto_ladder_id} as the ladder? (Y/N): ")
                 answer = input().strip().lower()
 
                 if answer in ("y", "yes", ""):
@@ -418,16 +452,14 @@ class WellCentricLaneAnalyzer:
 
             for ladder_id in ladder_ids: # through each ladder
                 if ladder_id not in self.complete_lanes:
-                    console(f"Lane {ladder_id} is not a complete lane, skipping.")
-                    print(f"Lane {ladder_id} is not a complete lane, skipping.")
+                    log(f"Lane {ladder_id} is not a complete lane, skipping.")
                     continue
 
                 ladder_lane = self.complete_lanes[ladder_id]
                 ladder_bands_sorted = sorted(ladder_lane['bands'], key=lambda b: b.centroid[0])  # top to bottom
                 n = len(ladder_bands_sorted)
                 if n < 2:
-                    console(f"Lane {ladder_id}: too few bands, skipping.")
-                    print(f"Lane {ladder_id}: too few bands, skipping.")
+                    log(f"Lane {ladder_id}: too few bands, skipping.")
                     continue
 
                 # Euclidean migration from well centroid (origin)
@@ -446,12 +478,11 @@ class WellCentricLaneAnalyzer:
                     if len(candidate_sizes) == n:
                         sizes = candidate_sizes
                     else:
-                        print(f"Provided {len(candidate_sizes)} sizes, but Lane {ladder_id} has {n} bands.")
+                        log(f"Provided {len(candidate_sizes)} sizes, but Lane {ladder_id} has {n} bands.")
 
                 while sizes is None:
                     if not interactive:
-                        console(f"Non-interactive mode: could not match provided sizes to {n} bands in Lane {ladder_id}. Skipping.")
-                        print(f"Non-interactive mode: could not match provided sizes to {n} bands in Lane {ladder_id}. Skipping.")
+                        log(f"Non-interactive mode: could not match provided sizes to {n} bands in Lane {ladder_id}. Skipping.")
                         self.ladder_calibrations = {}
                         self.lane_to_ladder = {}
                         return False
@@ -492,10 +523,9 @@ class WellCentricLaneAnalyzer:
                     'known_sizes': {id(b): float(s) for b, s in zip(ladder_bands_sorted, sizes)},
                 }
 
-                print(f"   Local two-point log-linear interpolation calibration complete for Ladder Lane {ladder_id}. Sizes attached for {n} ladder bands.")
+                log(f"   Local two-point log-linear interpolation calibration complete for Ladder Lane {ladder_id}. Sizes attached for {n} ladder bands.")
             if not ladder_calibrations:
-                console("No usable ladder calibration.")
-                print("No usable ladder calibration.")
+                log("No usable ladder calibration.")
                 self.ladder_calibrations = {}
                 self.lane_to_ladder = {}
                 return False
@@ -506,9 +536,9 @@ class WellCentricLaneAnalyzer:
                 only_lid = next(iter(ladder_calibrations))
                 for lid in self.extended_lanes:
                     lane_to_ladder[lid] = only_lid
-                print(f"\nAll lanes will use Ladder Lane {only_lid}.")
+                log(f"\nAll lanes will use Ladder Lane {only_lid}.")
             else:
-                print("\nMultiple ladders selected — assign which sample lanes use each ladder.")
+                log("\nMultiple ladders selected — assign which sample lanes use each ladder.")
 
                 for lid in ladder_calibrations:
                     lane_to_ladder[lid] = lid
@@ -530,7 +560,7 @@ class WellCentricLaneAnalyzer:
 
                 unassigned = [lid for lid in self.extended_lanes if lid not in lane_to_ladder]
                 if unassigned:
-                    print(
+                    log(
                         "Note: lanes "
                         f"{unassigned} were not assigned "
                         "to any ladder and will not receive size estimates."
@@ -549,8 +579,7 @@ class WellCentricLaneAnalyzer:
             centroid to its own lane's well centroid. Bands whose migration falls
             outside the calibrated ladder's range are left without a size estimate."""
 
-        console("Step 6: Calculating Migration Distances and Estimating Band Sizes")
-        print("\n=== Step 6: Calculating Migration Distances and Estimating Band Sizes ===")
+        log("\n=== Step 6: Calculating Migration Distances and Estimating Band Sizes ===")
         # Assign known sizes to ladder bands
         band_size_bp_by_id = {}
         for cal in self.ladder_calibrations.values():
@@ -564,14 +593,14 @@ class WellCentricLaneAnalyzer:
             if lane_id not in self.lane_to_ladder:
                 continue
             cal = self.ladder_calibrations[self.lane_to_ladder[lane_id]]
-            y0_lane = self._lane_origin_y(lane)
+            y0_lane = self._lane_origin_y(lane) # the well centroid
 
             for band in lane['bands']:
                 bid = id(band)
-                if bid in band_size_bp_by_id:
+                if bid in band_size_bp_by_id: # only get IDS of those non-ladder bands
                     continue
 
-                # Euclidean migration from this lane's well, then interpolate size
+                # Euclidean migration from this lane's well, then interpolate size 
                 x0_lane = float(lane['wells'][0].centroid[1])
                 m = float(np.sqrt((band.centroid[0] - y0_lane) ** 2 + (band.centroid[1] - x0_lane) ** 2))
                 size_est = self.interpolate_size_local(m, cal['migs_sorted'], cal['log_sizes_sorted'])
@@ -582,7 +611,7 @@ class WellCentricLaneAnalyzer:
         self.band_size_bp_by_id = band_size_bp_by_id
         self.outside_ladder = outside_ladder
 
-        print(f" Sizes attached for {len(self.band_size_bp_by_id)} bands.")
+        log(f" Sizes attached for {len(self.band_size_bp_by_id)} bands.")
 
         if self.outside_ladder:
             print("\n Bands outside ladder range (no size assigned):")
@@ -594,18 +623,16 @@ class WellCentricLaneAnalyzer:
 
     # Distances + print px & bp
     def calculate_distances_for_complete_lanes(self):
-        console("Step 6b: Building Well-to-Band Distance Report")
-        print("\n=== Step 6b: Building Well-to-Band Distance Report ===")
+        log("\n=== Step 6b: Building Well-to-Band Distance Report ===")
         if not self.complete_lanes:
-            console("No complete lanes for distance calculations")
-            print(" No complete lanes for distance calculations")
+            log(" No complete lanes for distance calculations")
             return False
 
         self.distances = []
         for lane_id, lane in sorted(self.complete_lanes.items()):
             wells_in_lane = lane['wells']
             bands_in_lane = lane['bands']
-            print(f"\nLane {lane_id}: {len(wells_in_lane)} wells x {len(bands_in_lane)} bands")
+            log(f"\nLane {lane_id}: {len(wells_in_lane)} wells x {len(bands_in_lane)} bands")
 
             for w_idx, well in enumerate(wells_in_lane, start=1):
                 bands_sorted = sorted(bands_in_lane, key=lambda b: b.centroid[0])  # top to bottom
@@ -640,8 +667,7 @@ class WellCentricLaneAnalyzer:
     # Simple visualization
     def create_visualization(self, save_path=None):
         """Create visualization with option to save instead of show if a path is provided"""
-        console("Step 7: Creating Visualization")
-        print("\n === Step 7: Creating Visualization ===")
+        log("\n === Step 7: Creating Visualization ===")
         fig, axes = plt.subplots(1, 3, figsize=(20, 8))
         colors = ['red', 'blue', 'green', 'purple', 'orange', 'brown', 'pink', 'cyan', 'lime', 'yellow']
 
@@ -649,8 +675,23 @@ class WellCentricLaneAnalyzer:
         ax1 = axes[0]
         # using rainbow for colour mapping
         ax1.imshow(self.segmap, cmap='nipy_spectral')
-        ax1.set_title('Segmentation (1=bands, 2=wells)')
-        ax1.axis('off') # Does not show axes
+
+        # Colour filtered components
+        for band in self.removed_low_confidence_bands + self.removed_small_bands:
+            coords = band.coords
+            ax1.scatter(coords[:, 1], coords[:, 0], c='red', s=1)
+
+        for well in self.removed_low_confidence_wells + self.removed_small_wells:
+            coords = well.coords
+            ax1.scatter(coords[:, 1], coords[:, 0], c='orange', s=1)
+
+        # Colour key outside the image
+        ax1.scatter([], [], c='red', label='Filtered band')
+        ax1.scatter([], [], c='orange', label='Filtered well')
+        ax1.legend(loc='upper left', bbox_to_anchor=(1.02, 1))
+
+        ax1.set_title('Segmentation (1=bands, 2=wells)', pad=20)
+        ax1.axis('off')
 
         # Plot 2: lanes (properly numbered 1, 2, 3...)
         ax2 = axes[1]
@@ -671,9 +712,7 @@ class WellCentricLaneAnalyzer:
             ax2.add_patch(rect)
             # Black colour text of lane ID and the addition of a box around that text for visibility
             # rounded corners ans space between edges and text and leaves default font size
-            ax2.text(left+5, top+15, f'Lane {lane_id}', color='k',
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-    
+            ax2.text((left + right) / 2, top - 10, f'{lane_id}', color='black', fontsize=10, fontweight='bold', ha='center', va='bottom', bbox=dict(boxstyle="round,pad=0.2", facecolor='white', alpha=0.9), clip_on=False)
         for ladder_id in self.ladder_calibrations:
             if ladder_id not in self.extended_lanes:
                 continue
@@ -686,7 +725,7 @@ class WellCentricLaneAnalyzer:
             ax2.text(left + 10, top + 40, f'Ladder (Lane {ladder_id})',
                     bbox=dict(boxstyle="round,pad=0.35", facecolor='yellow', alpha=0.9),
                     fontsize=12, fontweight='bold', color='black')
-        ax2.set_title('Extended Lanes (numbered 1, 2, 3...)')
+        ax2.set_title('Extended Lanes (numbered 1, 2, 3...)', pad=20)
         ax2.axis('off')
 
         # Plot 3: migration lines
@@ -703,40 +742,46 @@ class WellCentricLaneAnalyzer:
                     if by <= wy:
                         continue
                     ax3.plot([wx, bx], [wy, by], '-', color=color, linewidth=2, alpha=0.8)
-        ax3.set_title('Downward Migrations')
+        ax3.set_title('Downward Migrations', pad=20)
         ax3.axis('off')
 
         # Fixes spacing between plots
         plt.tight_layout()
     
-        # Save or show
+        # Save visualization
         if save_path:
-            # High resolution and trim extra white spaces
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            plt.close()  # Close to free memory
-            print(f" Visualization saved: {save_path}")
-        else:
-            plt.show()
+            log(f" Visualization saved: {save_path}")
+
+        fig.canvas.draw()
+
+        if 'COLAB_RELEASE_TAG' not in os.environ:
+            fig.canvas.flush_events()
+            plt.show(block=False)
+            plt.pause(0.5)
+
+        return fig
 
 
     def save_detailed_report(self, save_path):
         """Generate and save a detailed text report"""
-        console("Step 8: Saving Detailed Report")
+        log("Step 8: Saving Detailed Report")
         report_lines = []
         report_lines.append("="*80)
-        report_lines.append(" WELL-CENTRIC GEL ANALYSIS REPORT")
+        report_lines.append(" Well Centric Gel analysisT")
         report_lines.append("="*80)
         report_lines.append(f"Analysis timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append(f"Segmentation file: {getattr(self, 'segmap_path', 'Unknown')}")
         report_lines.append("")
 
         # Summary statistics
-        report_lines.append("DETECTION SUMMARY:")
+        report_lines.append("Detection summary:")
         report_lines.append(f"  • Wells detected: {len(self.wells)}")
         report_lines.append(f"  • Bands detected: {len(self.bands)}")
         report_lines.append(f"  • Extended lanes created: {len(self.extended_lanes)}")
         report_lines.append(f"  • Complete lanes (with bands): {len(self.complete_lanes)}")
         report_lines.append(f"  • Incomplete lanes (no bands): {len(self.incomplete_lanes)}")
+
         if self.incomplete_lanes:
             # converts to string, joins them and prints them out sorted
             incomplete_ids = ", ".join(map(str, sorted(self.incomplete_lanes.keys())))
@@ -803,7 +848,7 @@ class WellCentricLaneAnalyzer:
 
         with open(save_path, 'w',encoding='utf-8') as f:
             f.write(report_text)
-        print(f" Detailed report saved: {save_path}")
+        log(f" Detailed report saved: {save_path}")
 
 
     # Report
@@ -830,7 +875,7 @@ class WellCentricLaneAnalyzer:
             'ladder_lane_ids': list(self.ladder_calibrations.keys()),
             'outside_ladder_count': len(self.outside_ladder),
         }
-    
+
 def analyze_gel_with_proper_well_centric_approach(
     segmap_path,
     confidence_path=None,
@@ -839,9 +884,11 @@ def analyze_gel_with_proper_well_centric_approach(
     show_plot=True,
     save_plot_path=None,
     save_report_path=None,
-    interactive=True
+    interactive=True,
+    use_area_filter=True,
+    use_confidence_filter=True
 ):
-    analyzer = WellCentricLaneAnalyzer(segmap_path, confidence_path=confidence_path)
+    analyzer = WellCentricLaneAnalyzer(segmap_path, confidence_path=confidence_path, use_area_filter=use_area_filter, use_confidence_filter=use_confidence_filter)
     analyzer.segmap_path = segmap_path  # Store for reporting
     
     try:
@@ -854,32 +901,37 @@ def analyze_gel_with_proper_well_centric_approach(
         if renumber_lanes:
             analyzer.renumber_lanes_left_to_right()
 
+        # Show numbered lanes before asking which lane is the ladder
+        fig = None
+        if show_plot or save_plot_path:
+            fig = analyzer.create_visualization(save_path=save_plot_path)
+
+            if 'COLAB_RELEASE_TAG' in os.environ and interactive and fig is not None:
+                from IPython.display import display
+                display(fig)
+
         calibrated = analyzer.calibrate(
             ladder_sizes_bp=ladder_sizes_bp,
             interactive=interactive
         )
 
+        # Close this gel's figure after ladder selection
+        if fig is not None:
+            plt.close(fig)
+
         if not calibrated:
-            console("No usable ladder calibration - skipping this gel.")
-            print("No usable ladder calibration - skipping this gel.")
+            log("No usable ladder calibration - skipping this gel.")
             return 'Skipped'
 
         analyzer.assign_band_sizes()
 
-        if not analyzer.calculate_distances_for_complete_lanes(): return None
-        # Handle visualization
-        if show_plot or save_plot_path:
-            analyzer.create_visualization(save_path=save_plot_path)
-
-        # Handle report saving
-        if save_report_path:
-            analyzer.save_detailed_report(save_path=save_report_path)
+        if not analyzer.calculate_distances_for_complete_lanes():
+            return None
 
         return analyzer.generate_report()
         
     except Exception as e:
-        console(f"Error during analysis: {e}")
-        print(f"Error during analysis: {e}")
+        log(f"Error during analysis: {e}")
         import traceback; traceback.print_exc()
         return None
 
@@ -897,6 +949,10 @@ if __name__ == "__main__":
                         help='Auto-select the ladder lane with the most bands and use --ladder_sizes with no prompts')
     parser.add_argument('--ladder_sizes',
                         help='Comma-separated ladder sizes, required when --non_interactive is set (e.g. "1000,750,500,250")')
+    parser.add_argument('--no_area_filter', action='store_true',
+                    help='Disable small-component area filtering')
+    parser.add_argument('--no_confidence_filter', action='store_true',
+                    help='Disable confidence-based filtering')
 
     args = parser.parse_args()
 
@@ -929,6 +985,10 @@ if __name__ == "__main__":
     successful = 0
     failed = 0
     log_lines = []
+
+    in_colab = 'COLAB_RELEASE_TAG' in os.environ
+    redirect_stdout = not (in_colab and not args.non_interactive)
+
     for i, mask_file in enumerate(mask_files, 1):
             image_name = os.path.splitext(os.path.basename(mask_file))[0]
             console(f"\n[{i}/{len(mask_files)}] Processing: {image_name}")
@@ -940,8 +1000,11 @@ if __name__ == "__main__":
             gel_log_path = os.path.join(output_folder, f"{image_name}_run.log")
 
             try:
-                log_file = open(gel_log_path, 'w', encoding='utf-8')
-                sys.stdout = log_file
+                if redirect_stdout:
+                    log_file = open(gel_log_path, 'w', encoding='utf-8')
+                    sys.stdout = log_file
+                else:
+                    log_file = None
 
                 results = analyze_gel_with_proper_well_centric_approach(
                     segmap_path=mask_file,
@@ -950,11 +1013,14 @@ if __name__ == "__main__":
                     show_plot=args.show_plots,
                     save_plot_path=plot_path,
                     save_report_path=report_path,
-                    interactive=not args.non_interactive
+                    interactive=not args.non_interactive,
+                    use_area_filter=not args.no_area_filter,
+                    use_confidence_filter=not args.no_confidence_filter
                 )
 
-                sys.stdout = sys.__stdout__
-                log_file.close()
+                if redirect_stdout:
+                    sys.stdout = sys.__stdout__
+                    log_file.close()
 
                 if results == 'Skipped':
                     log_lines.append(f"Skipped: {image_name} - no usable ladder calibration")
@@ -963,6 +1029,7 @@ if __name__ == "__main__":
                     if results.get('distances'):
                         df = pd.DataFrame(results['distances'])
                         df['image_name'] = image_name
+                        df['size_bp'] = df['size_bp'].fillna('Outside ladder range')
                         df.to_csv(csv_path, index=False)
 
                     successful += 1
@@ -974,8 +1041,9 @@ if __name__ == "__main__":
                     console(f"   Failed: {image_name} - Analysis returned None")
 
             except Exception as e:
-                sys.stdout = sys.__stdout__
-                log_file.close()
+                if redirect_stdout:
+                    sys.stdout = sys.__stdout__
+                    log_file.close()
                 failed += 1
                 log_lines.append(f"Failed: {image_name} - {str(e)}")
                 console(f"   Failed: {image_name} - {str(e)}")
@@ -1001,4 +1069,4 @@ if __name__ == "__main__":
     print(f"Results saved to: {output_folder}")
     print(f"Log saved to: {log_path}")
     if failed > 0:
-        print(f" {failed} analyses failed - check log for details")
+        log(f" {failed} analyses failed - check log for details")     
