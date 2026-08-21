@@ -262,7 +262,7 @@ class TrainingHandler:
         :return: None
         """
         filepath = join(self.checkpoints_folder, 'checkpoint_epoch_%s.pth' % checkpoint)
-        saved_dict = torch.load(filepath, map_location=self.device)
+        saved_dict = torch.load(filepath, map_location="cpu")
         self.net.load_state_dict(saved_dict['network'])  # Load in state dictionary of model network
         if not self.reset_optimizer:
             try:
