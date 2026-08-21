@@ -32,7 +32,7 @@ import java.util.Collection;
 public class GelGeniePrefs {
     private static final StringProperty deviceProperty = PathPrefs.createPersistentPreference("gelgenie.device", "cpu");
     private static final BooleanProperty useDJLProperty = PathPrefs.createPersistentPreference("gelgenie.djl", true);
-    private static final BooleanProperty deletePreviousBandsProperty = PathPrefs.createPersistentPreference("gelgenie.deletepreviousbands", false);
+    private static final BooleanProperty deletePreviousBandsProperty = PathPrefs.createPersistentPreference("gelgenie.deletepreviousbands", true);
     private static final BooleanProperty globalCorrectionProperty = PathPrefs.createPersistentPreference("gelgenie.globalcorrection", false);
     private static final BooleanProperty localCorrectionProperty = PathPrefs.createPersistentPreference("gelgenie.localcorrection", false);
     private static final BooleanProperty rollingCorrectionProperty = PathPrefs.createPersistentPreference("gelgenie.rollingcorrection", false);
@@ -41,6 +41,10 @@ public class GelGeniePrefs {
 
     private static final Property<Integer> localCorrectionPixels = PathPrefs.createPersistentPreference("gelgenie.localcorrectionpixels", 5).asObject();
     private static final Property<Integer> rollingRadius = PathPrefs.createPersistentPreference("gelgenie.rollingradius", 50).asObject();
+
+    // Multiplier on the median band width used as the DBSCAN eps when clustering bands into lanes.
+    // Exposed as a preference because it needs per-image tuning; smaller = splits lanes more readily.
+    private static final Property<Double> dbscanEpsFactor = PathPrefs.createPersistentPreference("gelgenie.dbscanepsfactor", 0.60).asObject();
 
     private static final Collection<BooleanProperty> dataBoolPreferences =
             new ArrayList<>(
@@ -85,6 +89,7 @@ public class GelGeniePrefs {
         return localCorrectionPixels;
     }
     public static Property<Integer> rollingRadius() { return rollingRadius; }
+    public static Property<Double> dbscanEpsFactor() { return dbscanEpsFactor; }
 
     public static Collection<BooleanProperty> dataBoolPreferences() {return dataBoolPreferences; }
 

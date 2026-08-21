@@ -270,10 +270,7 @@ class TrainingHandler:
             except Exception as e:
                 print(f"Optimizer state not loaded: {e}")
         else:
-            print("Resetting optimizer, skipping checkpoint state load")
-        for param_group in self.optimizer.param_groups: 
-            param_group['lr'] = self.config_lr          
-        print("Using LR:", [pg["lr"] for pg in self.optimizer.param_groups])  
+            print("Resetting optimizer, skipping checkpoint state load")        
         print("Optimizer type:", type(self.optimizer).__name__)
         if self.scheduler:
             try:
@@ -286,18 +283,30 @@ class TrainingHandler:
                     print("Scheduler T_cur after load:", self.scheduler.T_cur)
             except Exception as e:
                 print(f"Scheduler state not loaded (type mismatch), starting fresh: {e}")
-            if hasattr(self.scheduler, 'base_lrs'):
-                self.scheduler.base_lrs = [self.config_lr for _ in self.scheduler.base_lrs]            
-            if hasattr(self.scheduler, "_last_lr"):
-                self.scheduler._last_lr = [self.config_lr for _ in self.scheduler._last_lr]
-            if hasattr(self.scheduler, 'T_0') and self.config_restart_period:
-                self.scheduler.T_0 = self.config_restart_period
-                self.scheduler.T_i = self.config_restart_period
-                print("Scheduler T_0 overridden to:", self.scheduler.T_0) 
-                print("Scheduler T_i overridden to:", self.scheduler.T_i)   
-            print("LR after scheduler restore:", [pg["lr"] for pg in self.optimizer.param_groups])
-            if hasattr(self.scheduler, 'base_lrs'):
-                print("Scheduler base_lrs:", self.scheduler.base_lrs)
+            
+             # Only override LR/scheduler if config actually differs from checkpoint (avoids resume glitch)
+            lr_changed = hasattr(self.scheduler, 'base_lrs') and self.scheduler.base_lrs[0] != self.config_lr
+            restart_changed = (hasattr(self.scheduler, 'T_0') and self.config_restart_period
+                                and self.scheduler.T_0 != self.config_restart_period)
+            
+            if lr_changed or restart_changed:
+                print(f"Detected genuine config change (lr_changed={lr_changed}, "
+                      f"restart_changed={restart_changed}) — applying overrides")
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = self.config_lr
+                if lr_changed:
+                    self.scheduler.base_lrs = [self.config_lr for _ in self.scheduler.base_lrs]
+                    if hasattr(self.scheduler, "_last_lr"):
+                        self.scheduler._last_lr = [self.config_lr for _ in self.scheduler._last_lr]
+                if restart_changed:
+                    self.scheduler.T_0 = self.config_restart_period
+                    self.scheduler.T_i = self.config_restart_period
+                    print("Scheduler T_0 overridden to:", self.scheduler.T_0)
+                    print("Scheduler T_i overridden to:", self.scheduler.T_i)
+            else:
+                # Genuine resume - leave everything as loaded, no override needed
+                print("Genuine resume detected — leaving optimizer LR and scheduler state untouched")
+  
         self.current_epoch = saved_dict['epoch'] + 1
         if self.early_stopper is not None and 'early_stopper' in saved_dict and saved_dict['early_stopper'] is not None:
             self.early_stopper.history = saved_dict['early_stopper'].get('history', [])

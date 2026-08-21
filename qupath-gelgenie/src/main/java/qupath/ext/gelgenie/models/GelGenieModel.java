@@ -66,6 +66,9 @@ public class GelGenieModel {
     @SerializedName("num_classes")
     private int numClasses = 2; //defaults to 2 unless otherwise specified
 
+    @SerializedName("role")
+    private String role; // optional preset role tag (e.g. "accuracy"/"detection") - null if untagged
+
     private Boolean dummyModel = false;
 
     public String getName() {
@@ -85,6 +88,20 @@ public class GelGenieModel {
     public Boolean isDummyModel() {return dummyModel;}
 
     public int getNumClasses() {return numClasses;}
+
+    /** Optional preset-role tag from the registry (e.g. {@code "accuracy"}/{@code "detection"}), or null. */
+    public String getRole() {return role;}
+
+    /**
+     * Whether this is an nnU-Net model, which requires a different inference pipeline (no external
+     * padding) and is only supported via the DJL/TorchScript path.
+     * TODO: this is currently inferred from the model name; migrate to the {@code modelType} field
+     *  once the registry reliably populates it.
+     * @return true if this model is an nnU-Net model.
+     */
+    public boolean isNnUNet() {
+        return modelName != null && modelName.contains("nnUNet");
+    }
 
     public void setDummyModel(Boolean dummyModel) {this.dummyModel = dummyModel;}
 
