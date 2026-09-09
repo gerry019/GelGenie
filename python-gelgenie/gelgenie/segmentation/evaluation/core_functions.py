@@ -18,7 +18,7 @@ from gelgenie.classical_tools.watershed_segmentation import watershed_analysis, 
 from gelgenie.segmentation.data_handling.dataloaders import ImageDataset, ImageMaskDataset
 from gelgenie.segmentation.helper_functions.general_functions import create_dir_if_empty, index_converter
 from gelgenie.segmentation.helper_functions.dice_score import multiclass_dice_coeff
-from gelgenie.segmentation.evaluation.gel_analysis import analyze_gel_with_proper_well_centric_approach
+from gelgenie.segmentation.evaluation.gel_analysis_with_wells import analyze_gel_with_proper_well_centric_approach
 
 import os
 from torch.utils.data import DataLoader
@@ -619,7 +619,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
 def segment_and_plot(models, model_names, input_folder, output_folder, minmax_norm=False, percentile_norm=False,
                      multi_augment=False, images_per_row=2, run_classical_techniques=False, nnunet_models_and_folders=None,
-                     band_colour=(163, 106, 13), well_colour=(0, 255, 0), run_analysis=False, ladder_sizes_bp=None):
+                     band_colour=(163, 106, 13), well_colour=(0, 255, 0), run_analysis=False, ladder_sizes_bp=None, invert_images=False):
     """
     Segments images in input_folder using models and saves the output image and a quick comparison to the output folder.
     :param models: Pre-loaded pytorch segmentation models
@@ -639,7 +639,7 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
     """
 
     dataset = ImageDataset(input_folder, 1, padding=False, individual_padding=True, minmax_norm=minmax_norm,
-                           percentile_norm=percentile_norm)
+                           percentile_norm=percentile_norm, invert_images=invert_images)
     dataloader = DataLoader(dataset, shuffle=False, batch_size=1, num_workers=0, pin_memory=True)
 
     if run_classical_techniques:
