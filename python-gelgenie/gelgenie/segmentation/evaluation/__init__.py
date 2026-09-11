@@ -21,14 +21,22 @@ import toml
 def model_eval_load(exp_folder, eval_epoch):
     import toml
     import torch
+    import os
+    import glob
+    import pandas as pd
     from os.path import join
     from gelgenie.segmentation.networks import model_configure
     from gelgenie.segmentation.helper_functions.stat_functions import load_statistics
 
+
     model_config = toml.load(join(exp_folder, 'config.toml'))['model']
     model, _, _ = model_configure(**model_config)
     if eval_epoch == 'best':
-        stats = load_statistics(join(exp_folder, 'training_logs'), 'training_stats.csv', config='pd')
+        stats_files = glob.glob(join(exp_folder, 'training_logs', 'training_stats*.csv')) # Adapted for resumed runs
+        stats = pd.concat(
+            [load_statistics(join(exp_folder, 'training_logs'), os.path.basename(f), config='pd') for f in stats_files],
+            ignore_index=True
+        )
         sel_epoch = stats['Epoch'][stats['Dice Score'].idxmax()]
     else:
         sel_epoch = eval_epoch

@@ -18,7 +18,7 @@ from gelgenie.classical_tools.watershed_segmentation import watershed_analysis, 
 from gelgenie.segmentation.data_handling.dataloaders import ImageDataset, ImageMaskDataset
 from gelgenie.segmentation.helper_functions.general_functions import create_dir_if_empty, index_converter
 from gelgenie.segmentation.helper_functions.dice_score import multiclass_dice_coeff
-from gelgenie.segmentation.evaluation.gel_analysis import analyze_gel_with_proper_well_centric_approach
+from gelgenie.segmentation.evaluation.gel_analysis_with_wells import analyze_gel_with_proper_well_centric_approach
 
 import os
 from torch.utils.data import DataLoader
