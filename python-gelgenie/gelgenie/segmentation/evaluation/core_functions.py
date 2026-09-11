@@ -18,7 +18,6 @@ from gelgenie.classical_tools.watershed_segmentation import watershed_analysis, 
 from gelgenie.segmentation.data_handling.dataloaders import ImageDataset, ImageMaskDataset
 from gelgenie.segmentation.helper_functions.general_functions import create_dir_if_empty, index_converter
 from gelgenie.segmentation.helper_functions.dice_score import multiclass_dice_coeff
-from gelgenie.segmentation.evaluation.gel_analysis_with_wells import analyze_gel_with_proper_well_centric_approach
 
 import os
 from torch.utils.data import DataLoader
@@ -619,7 +618,7 @@ def segment_and_quantitate(models, model_names, input_folder, mask_folder, outpu
 
 def segment_and_plot(models, model_names, input_folder, output_folder, minmax_norm=False, percentile_norm=False,
                      multi_augment=False, images_per_row=2, run_classical_techniques=False, nnunet_models_and_folders=None,
-                     band_colour=(163, 106, 13), well_colour=(0, 255, 0), run_analysis=False, ladder_sizes_bp=None, invert_images=False):
+                     band_colour=(163, 106, 13), well_colour=(0, 255, 0), invert_images=False):
     """
     Segments images in input_folder using models and saves the output image and a quick comparison to the output folder.
     :param models: Pre-loaded pytorch segmentation models
@@ -633,8 +632,6 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
     :param run_classical_techniques: Set to true to also run watershed and multiotsu segmentation apart from selected models
     :param nnunet_models_and_folders: List of tuples containing (model name, folder location) for pre-computed nnunet results on the same dataset
     :param map_pixel_colour: Colour to use for positive pixels in the output segmentation map (tuple, RGB)
-    :param run_analysis: Set to true to run distance measurement analysis on segmentation masks
-    :param ladder_sizes_bp: Optional pre-specified ladder sizes (list of floats), otherwise prompts per image
     :return: N/A (all outputs saved to file)
     """
 
@@ -661,11 +658,6 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
         create_dir_if_empty(os.path.join(output_folder, mname))
 
     create_dir_if_empty(os.path.join(output_folder, 'method_comparison'))
-
-    # Track analysis results per model of success vs failed gel image post-segmentation analysis (distance and weight measurement) per imae
-    analysis_results = {}
-    if run_analysis:
-        analysis_results = {mname: {'successful': 0, 'failed': 0, 'log_lines': []} for mname in model_names}
 
     # preparing model outputs, including separation of different bands and labelling
     for im_index, batch in tqdm(enumerate(dataloader), total=len(dataloader)):
@@ -716,76 +708,5 @@ def segment_and_plot(models, model_names, input_folder, output_folder, minmax_no
             save_model_output(output_folder, mname, image_name, rgb_labels)
             save_segmentation_map(output_folder, mname, image_name, mask,confidence_map=confidence_map, band_colour=(163, 106, 13), well_colour=(0, 255, 0))
 
-            if run_analysis:
-                # Get path to the raw mask
-                raw_mask_path = os.path.join(output_folder, mname, f'{image_name}_raw_mask.tif')
-
-                # Check if confidence map exists ( Theoretical string path and actual path)
-                conf_path = os.path.join(output_folder, mname, f'{image_name}_confidence_map.tif')
-                confidence_path = conf_path if os.path.exists(conf_path) else None 
-                
-                # Set up analysis output paths 
-                analysis_plot_path = os.path.join(output_folder, mname, f'{image_name}_analysis.png')
-                analysis_report_path = os.path.join(output_folder, mname, f'{image_name}_report.txt')
-                analysis_csv_path = os.path.join(output_folder, mname, f'{image_name}_distances.csv')
-                
-                print(f"\n>>> Running analysis on {image_name} (model: {mname})...")
-                
-                try:
-                    # Runring analysis
-                    results = analyze_gel_with_proper_well_centric_approach(
-                        segmap_path=raw_mask_path,
-                        confidence_path=confidence_path,
-                        ladder_lane_id=None,  # Auto-select
-                        ladder_sizes_bp=ladder_sizes_bp,  # Will prompt if None
-                        renumber_lanes=True,
-                        show_plot=False,  # Need to update to remove 
-                        save_plot_path=analysis_plot_path,
-                        save_report_path=analysis_report_path
-                    )
-                    
-                    # Save CSV if results available
-                    if results and results.get('distances'):
-                        df = pd.DataFrame(results['distances'])
-                        df['image_name'] = image_name
-                        df['model_name'] = mname
-                        df.to_csv(analysis_csv_path, index=False)
-                        analysis_results[mname]['successful'] += 1
-                        analysis_results[mname]['log_lines'].append(f"SUCCESS: {image_name}")
-                        print(f"Analysis complete: {len(results['distances'])} distance measurements saved")
-                    else:
-                        analysis_results[mname]['failed'] += 1
-                        analysis_results[mname]['log_lines'].append(f"FAILED: {image_name} - No distances found")
-                        print(f"Analysis completed but no distances found")
-                    
-                except Exception as e:
-                    analysis_results[mname]['failed'] += 1
-                    analysis_results[mname]['log_lines'].append(f"FAILED: {image_name} - {str(e)}")
-                    print(f" Analysis failed for {image_name}: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
-
         plot_model_comparison(all_model_outputs, model_names, image_name, np_image, output_folder,
                               images_per_row, double_indexing)
-
-    # Write analysis summary logs at the end
-    if run_analysis:
-        from datetime import datetime
-        for mname in model_names:
-            results = analysis_results[mname]
-            total_analyzed = results['successful'] + results['failed']
-            
-            if total_analyzed > 0:  # Only if analysis was run for this model
-                log_path = os.path.join(output_folder, mname, 'analysis_log.txt')
-                with open(log_path, 'w') as f:
-                    f.write(f"Gel Analysis Log - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write("="*60 + "\n\n")
-                    f.write(f"Model: {mname}\n")
-                    f.write(f"Total images: {total_analyzed}\n")
-                    f.write(f"Successful: {results['successful']}\n")
-                    f.write(f"Failed: {results['failed']}\n\n")
-                    f.write("Details:\n")
-                    f.write("-" * 20 + "\n")
-                    for line in results['log_lines']:
-                        f.write(line + "\n")
-                print(f"\n Analysis summary saved: {log_path}")
