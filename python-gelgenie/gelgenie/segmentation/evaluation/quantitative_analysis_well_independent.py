@@ -10,15 +10,20 @@ from sklearn.cluster import DBSCAN
 from collections import defaultdict
 from skimage.morphology import convex_hull_image
 import matplotlib
+from matplotlib import patches
 import sys
 
 def console(msg=""):
-    """Print directly to the real terminal, bypassing any stdout redirection."""
     print(msg, file=sys.__stdout__, flush=True)
 
+def log(msg=""):
+    print(msg)      # goes to the log file (stdout)
+    console(msg)    # also appears in the terminal
 
-if 'google.colab' not in sys.modules:
-    matplotlib.use("TkAgg")
+
+
+matplotlib.use("TkAgg")
+
 import matplotlib.pyplot as plt
 plt.ion()
 
@@ -28,7 +33,7 @@ class DBSCANLaneAnalyzer:
         """
         segmap format: 1 = bands, 0 = background
         """
-        print(f"Loading segmentation map: {segmap_path}")
+        log(f"Loading segmentation map: {segmap_path}")
         self.segmap_path = segmap_path
         self.gel_name = os.path.basename(segmap_path).removesuffix("_raw_mask.tif")
         self.segmap = imread(segmap_path) # Numpy array
@@ -36,16 +41,16 @@ class DBSCANLaneAnalyzer:
         # Load confidence map if provided for reporting in csv file
         self.confidence_map = None
         if confidence_path and os.path.isfile(confidence_path):
-            self.confidence_map = imread(confidence_path).astype(np.float32)  # To be used for calculations
+            self.confidence_map = imread(confidence_path).astype(np.float32)  # To be used for filtering
 
             if self.confidence_map.shape != self.segmap.shape: # Size map check
                 raise ValueError(
                     f"Shape mismatch: mask={self.segmap.shape}, "
                     f"confidence={self.confidence_map.shape}"
                 )
-            print(f"Loaded confidence map: {confidence_path}")
+            log(f"Loaded confidence map: {confidence_path}")
         else:
-            print("No confidence map provided")
+            log("No confidence map provided")
 
         self.use_confidence_map = self.confidence_map is not None  # auto-detected from input
 
@@ -53,7 +58,8 @@ class DBSCANLaneAnalyzer:
         self.original_bands = None       # all raw regionprops, before any filtering
         self.original_bands_mask = None  # binary mask, before any filtering
         self.original_bands_labeled = None  # labeled array matching original_bands' .label IDs
-        self.removed_bands = None        # bands dropped by confidence filtering
+        self.removed_low_confidence_bands = [] # To be able to filter only these
+        self.removed_small_bands = []     # To be able to filter only these
         self.filtered_bands = None       # surviving bands after confidence + relabel
         self.filtered_bands_mask = None  # binary mask after confidence filtering
         self.bands_mask = None           # final repaired mask (post split-band repair)
@@ -70,8 +76,7 @@ class DBSCANLaneAnalyzer:
         print(f"Unique labels: {np.unique(self.segmap)}") # Labels
 
     def extract_bands(self):
-        console("Step 1: Extracting Bands")
-        print("\n=== Step 1: Extracting Bands ===")
+        log("\n=== Step 1: Extracting Bands ===")
 
         # Extract bands from segmap using connected component labeling and gets its properties
         bands_mask = (self.segmap == 1)
@@ -84,17 +89,20 @@ class DBSCANLaneAnalyzer:
 
         print(f"   Found {len(all_bands)} raw band detections")
         return True
-    
-    def filter_bands(self):
-        console("Step 2: Filtering Bands")
-        print("\n=== Step 2: Filtering Bands ===")
+
+    def filter_bands(self, apply_area_filter=True, apply_confidence_filter=True):
+        log("\n=== Step 2: Filtering Bands ===")
 
         # Filter 1: remove low-confidence bands (mean confidence < 0.8)
         confidence_threshold = 0.8
-        if self.use_confidence_map:
+
+        if apply_confidence_filter and self.use_confidence_map:
+            log("   Confidence filtering: ON")
+
             confidence_filtered_bands = []
             removed_low_confidence = []
-            for band in self.original_bands: # Looks up confidence-map values and gets the mean per band
+
+            for band in self.original_bands:
                 coords = band.coords
                 mean_conf = float(
                     np.mean(self.confidence_map[coords[:, 0], coords[:, 1]])
@@ -106,25 +114,49 @@ class DBSCANLaneAnalyzer:
                     removed_low_confidence.append(band)
 
             if removed_low_confidence:
-                print(f"   Filtered out {len(removed_low_confidence)} low-confidence bands (< {confidence_threshold})")
+                log(f"   Filtered out {len(removed_low_confidence)} low-confidence bands (< {confidence_threshold})")
 
-            self.removed_bands = removed_low_confidence
+            self.removed_low_confidence_bands = removed_low_confidence
+
         else:
-            # Using manually cleaned masks
             confidence_filtered_bands = list(self.original_bands)
-            self.removed_bands = []
+            self.removed_low_confidence_bands = []
+
+            if not apply_confidence_filter:
+                log("   Confidence filtering: OFF")
+            else:
+                log("   Confidence filtering: NOT APPLIED (no confidence map)")
 
         # Filter 2: remove bands < 0.0075% of total image area
-        total_image_area = self.segmap.shape[0] * self.segmap.shape[1]
-        min_band_area = 0.000075 * total_image_area
+        if apply_area_filter:
+            log("   Area filtering: ON")
 
-        area_filtered_bands = [b for b in confidence_filtered_bands if b.area >= min_band_area]
+            total_image_area = self.segmap.shape[0] * self.segmap.shape[1]
+            min_band_area = 0.000075 * total_image_area # Can be arranged accoridng the the image as needed
 
-        removed_small = len(confidence_filtered_bands) - len(area_filtered_bands)
-        if removed_small > 0:
-            print(f"   Filtered out {removed_small} small bands (< 0.0075% of image area)")
+            area_filtered_bands = [
+                b for b in confidence_filtered_bands
+                if b.area >= min_band_area
+            ]
 
-        print(f"   Found {len(area_filtered_bands)} bands (after filtering)")
+            self.removed_small_bands = [
+                b for b in confidence_filtered_bands
+                if b.area < min_band_area
+            ]
+
+            if self.removed_small_bands:
+                log(f"   Filtered out {len(self.removed_small_bands)} small bands (< 0.0075% of image area)")
+
+        else:
+            log("   Area filtering: OFF")
+            area_filtered_bands = confidence_filtered_bands
+            self.removed_small_bands = []
+
+        # Output final number of bands
+        if apply_area_filter or (apply_confidence_filter and self.use_confidence_map):
+            log(f"   Found {len(area_filtered_bands)} bands (after filtering)")
+        else:
+            log(f"   Found {len(area_filtered_bands)} bands")
 
         # Create a mask containing only bands that passed filtering
         filtered_mask = np.zeros_like(self.original_bands_mask, dtype=bool)
@@ -141,15 +173,13 @@ class DBSCANLaneAnalyzer:
         self.filtered_bands = list(regionprops(bands_labeled))
 
         if not self.filtered_bands:
-            console("No bands detected after filtering.")
-            print("No bands detected after filtering.")
+            log("No bands detected after filtering.")
             return False
 
         return True
     # Step 3
     def cluster_bands(self):
-        console("Step 3: Clustering Bands")
-        print("\n=== Step 3: Clustering Bands ===")
+        log("\n=== Step 3: Clustering Bands ===")
 
         # Extract x centroid of each band
         x_centroids = np.array([band.centroid[1] for band in self.filtered_bands])
@@ -159,14 +189,14 @@ class DBSCANLaneAnalyzer:
         # Bands in same lane should have x-centroids within roughly one band-width of each other
         band_widths = np.array([band.bbox[3] - band.bbox[1] for band in self.filtered_bands])
         eps_val = float(np.median(band_widths)) * 0.60 # This can be changed  per image as required
-        print(f"Median band width: {np.median(band_widths):.1f}px, eps={eps_val:.1f}px")
+        log(f"Median band width: {np.median(band_widths):.1f}px, eps={eps_val:.1f}px")
 
         # DBSCAN clustering on 1D x-centroids
         # min_samples=1 because single band lanes are biologically valid
         dbscan = DBSCAN(eps=eps_val, min_samples=1)
         labels = dbscan.fit_predict(X)
         n_clusters = len(set(labels))  # No noise removal as each band is valid
-        print(f"DBSCAN: {n_clusters} clusters")
+        log(f"DBSCAN: {n_clusters} clusters")
 
         # Relabel clusters so IDs match left-to-right lane order
         label_mean_x = {
@@ -196,8 +226,7 @@ class DBSCANLaneAnalyzer:
         return True
     # Step 4
     def repair_split_bands(self):
-        console("Step 4: Repairing Split Bands")
-        print("\n=== Step 4: Repairing Split Bands ===")
+        log("\n=== Step 4: Repairing Split Bands ===")
 
         def find_split_bands(bands):
             """
@@ -230,7 +259,7 @@ class DBSCANLaneAnalyzer:
             # Find split band pairs using ratio check
             split_pairs = find_split_bands(bands)
             if split_pairs:
-                print(f"Lane {cluster_id}: {len(split_pairs)} split band pair(s) detected")
+                log(f"Lane {cluster_id}: {len(split_pairs)} split band pair(s) detected")
 
                 # Merge each split pair using a convex hull (taken from postprocessing segmentation code)
                 # Create a mask containing only the current cluster
@@ -246,7 +275,7 @@ class DBSCANLaneAnalyzer:
                     # Update both the cluster mask and the global mask
                     cluster_mask[merged_mask] = True
                     self.bands_mask[merged_mask] = True
-                    self.merged_pixels[merged_mask] = True 
+                    self.merged_pixels[merged_mask] = True
 
                 # Relabel only this cluster
                 cluster_labels = label(cluster_mask)
@@ -263,8 +292,7 @@ class DBSCANLaneAnalyzer:
 
         # Step 5
     def estimate_lanes(self):
-        console("Step 5: Estimating Lanes")
-        print("\n=== Step 5: Estimating Lanes ===")
+        log("\n=== Step 5: Estimating Lanes ===")
 
         # Can be adapted accordingly
         MIN_COVERAGE = 0.15      # bands must span at least 15% of gel height
@@ -291,7 +319,7 @@ class DBSCANLaneAnalyzer:
                     'mean_x': float(xs[0]),
                     'bands': bands
                 }
-                print(f"Cluster {cluster_id}: 1 band and so it will borrow slope from neighbours")
+                log(f"Cluster {cluster_id}: 1 band and so it will borrow slope from neighbours")
 
             else:
                 # Apply small band filter
@@ -353,7 +381,7 @@ class DBSCANLaneAnalyzer:
         print(f"\nMedian absolute slope: {median_slope:.4f}")
         print(f"Slope limit: {slope_limit:.4f}")
 
-        for cluster_id, lane in list(multi_band_clusters.items()): #Checks for slop and output warning
+        for cluster_id, lane in list(multi_band_clusters.items()): # Checks for slope and output warning
             coverage_ok = lane['coverage'] >= MIN_COVERAGE
             slope_ok = abs(lane['slope']) <= slope_limit if slope_limit > 0 else True
 
@@ -457,16 +485,25 @@ class DBSCANLaneAnalyzer:
 
     #Step 6
     def visualise(self, save_path=None):
-        console("Step 6: Creating Visualization")
-        print("\n=== Step 6: Creating Visualization ===")
+        log("\n=== Step 6: Creating Visualization ===")
         fig, ax = plt.subplots(figsize=(20, 8))
         ax.imshow(self.bands_mask, cmap='gray')
+
+        # Show bands removed by confidence filtering in red
+        for band in self.removed_low_confidence_bands:
+            coords = band.coords
+            ax.scatter(coords[:, 1], coords[:, 0], color='red', s=1, alpha=0.8, zorder=4)
+
+        # Show bands removed by area filtering in blue
+        for band in self.removed_small_bands:
+            coords = band.coords
+            ax.scatter(coords[:, 1], coords[:, 0], color='blue', s=1, alpha=0.8, zorder=4)
 
 
         gel_height = self.bands_mask.shape[0]
         img_width = self.bands_mask.shape[1]
 
-        cmap = plt.cm.get_cmap('tab20', 20)
+        cmap = matplotlib.colormaps['tab20'].resampled(20)
         y_vals = np.linspace(0, gel_height, 200)
 
         for lane_number, lane in self.all_lane_axes.items():
@@ -496,6 +533,14 @@ class DBSCANLaneAnalyzer:
                     bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.5))
 
         ax.set_title(f'Lane ROI strips (DBSCAN eps={self.eps_val:.1f}px): {len(self.all_lane_axes)} lanes')
+
+        legend_handles = [
+        patches.Patch(facecolor='white', edgecolor='black', label='Retained band'),
+        patches.Patch(facecolor='red', label='Removed: low confidence'),
+        patches.Patch(facecolor='blue', label='Removed: small area')
+    ]
+
+        ax.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1.01, 1))
         ax.axis('off')
         plt.tight_layout()
 
@@ -525,7 +570,7 @@ class DBSCANLaneAnalyzer:
 
 
     def interpolate_size_local(self, m, ladder_migs_sorted, log_sizes_sorted):
-        
+
         n = len(ladder_migs_sorted)
 
         # Outside the calibrated range entirely - do not extrapolate
@@ -542,30 +587,27 @@ class DBSCANLaneAnalyzer:
         # How far along between the two rungs (0 = at mig_low, 1 = at mig_high)
         fraction = (m - mig_low) / (mig_high - mig_low)
 
-        # Interpolate in log space, then convert back to bp
+        # Interpolate in log space, then convert back to bp/kDa
         log_size_est = log_low + fraction * (log_high - log_low)
         return float(10 ** log_size_est)
-    
+
     # Step 7
     def calibrate(self, ladder_sizes_bp=None, interactive=True):
-        console("Step 7: Ladder Calibration (local two-point interpolation)")
-        print(f"\n=== Step 7: Ladder Calibration (local two-point interpolation) ===")
+        log(f"\n=== Step 7: Ladder Calibration (local two-point interpolation) ===")
         # Auto-select ladder: lane with most bands (and ask user to verify)
         auto_ladder_id = max(self.all_lane_axes.keys(), key=lambda k: len(self.all_lane_axes[k]['bands']))
         print(f"\nAuto-selected ladder: Lane {auto_ladder_id}")
 
-        if not interactive:
+        if not interactive: # Either the user supply the ladder sizes before or once prompted
             if ladder_sizes_bp is None:
-                console("Non-interactive mode requires ladder_sizes_bp to be provided. Skipping calibration.")
-                print("Non-interactive mode requires ladder_sizes_bp to be provided. Skipping calibration.")
+                log("Non-interactive mode requires ladder_sizes_bp to be provided. Skipping calibration.")
                 self.ladder_calibrations = {}
                 self.lane_to_ladder = {}
                 return False
             ladder_ids = [auto_ladder_id]
-            console(f"Non-interactive mode: using auto-selected Lane {auto_ladder_id} with provided sizes.")
-            print(f"Non-interactive mode: using auto-selected Lane {auto_ladder_id} with provided sizes.")
+            log(f"Non-interactive mode: using auto-selected Lane {auto_ladder_id} with provided sizes.")
         else:
-            console("Use this ladder? (Y/N): ")
+            console(f"Use Lane {auto_ladder_id} as the ladder? (Y/N): ")
             answer = input().strip().lower()
 
             if answer in ("y", "yes", ""):
@@ -598,7 +640,7 @@ class DBSCANLaneAnalyzer:
                 if len(candidate_sizes) == n:
                     sizes = candidate_sizes
                 else:
-                    print(f"Provided {len(candidate_sizes)} sizes, but Lane {ladder_id} has {n} bands.")
+                    log(f"Provided {len(candidate_sizes)} sizes, but Lane {ladder_id} has {n} bands.")
 
             while sizes is None:
                 if not interactive:
@@ -608,7 +650,7 @@ class DBSCANLaneAnalyzer:
                     self.lane_to_ladder = {}
                     return False
 
-                console(f"Enter {n} sizes in bp for Lane {ladder_id} (top to bottom): ")
+                console(f"Enter {n} sizes in bp/kDa for Lane {ladder_id} (top to bottom): ")
                 raw = input().strip()
                 try:
                     candidate_sizes = np.array(
@@ -616,17 +658,17 @@ class DBSCANLaneAnalyzer:
                         dtype=float
                     )
                 except Exception:
-                    print("Could not parse sizes. Please try again.")
+                    log("Could not parse sizes. Please try again.")
                     continue
 
                 if len(candidate_sizes) != n:
-                    print(f"Provided {len(candidate_sizes)} sizes but {n} bands in Lane {ladder_id}. Please re-enter.")
+                    log(f"Provided {len(candidate_sizes)} sizes but {n} bands in Lane {ladder_id}. Please re-enter.")
                     continue
 
                 sizes = candidate_sizes
 
             if not np.all(np.diff(sizes) < 0):
-                print("Note: ladder sizes are not strictly decreasing top to bottom. Proceeding anyway.")
+                log("Note: ladder sizes are not strictly decreasing top to bottom. Proceeding anyway.")
 
             log_sizes = np.log10(sizes)
 
@@ -646,9 +688,8 @@ class DBSCANLaneAnalyzer:
 
             print(f"   Local two-point log-linear interpolation calibration complete for Ladder Lane {ladder_id}. Sizes attached for {n} ladder bands.")
 
-        if not ladder_calibrations:
-            console("No usable ladder calibration.")
-            print("No usable ladder calibration.")
+        if not ladder_calibrations: # More prompts
+            log("No usable ladder calibration.")
             self.ladder_calibrations = {}
             self.lane_to_ladder = {}
             return False
@@ -659,9 +700,9 @@ class DBSCANLaneAnalyzer:
             only_lid = next(iter(ladder_calibrations))
             for lid in self.all_lane_axes:
                 lane_to_ladder[lid] = only_lid
-            print(f"\nAll lanes will use Ladder Lane {only_lid}.")
+            log(f"\nAll lanes will use Ladder Lane {only_lid}.")
         else:
-            print("\nMultiple ladders selected — assign which sample lanes use each ladder.")
+            log("\nMultiple ladders selected — assign which sample lanes use each ladder.")
 
             for lid in ladder_calibrations:
                 lane_to_ladder[lid] = lid
@@ -683,7 +724,7 @@ class DBSCANLaneAnalyzer:
 
             unassigned = [lid for lid in self.all_lane_axes if lid not in lane_to_ladder]
             if unassigned:
-                print(
+                log(
                     "Note: lanes "
                     f"{unassigned} were not assigned "
                     "to any ladder and will not receive size estimates."
@@ -696,8 +737,7 @@ class DBSCANLaneAnalyzer:
 
         # Step 8
     def measure(self):
-        console("Step 8: Calculating Distances")
-        print(f"\n=== Step 8: Calculating Distances ===")
+        log(f"\n=== Step 8: Calculating Distances ===")
         # Assign known sizes to ladder bands
         band_size_bp_by_id = {}
         for cal in self.ladder_calibrations.values():
@@ -727,7 +767,7 @@ class DBSCANLaneAnalyzer:
         print(f"   Sizes attached for {len(band_size_bp_by_id)} bands.")
 
         if outside_ladder:
-            print("\n   Bands outside their assigned ladder range (no size assigned):")
+            log("\n   Bands outside their assigned ladder range (no size assigned):")
             for lane_id, band in outside_ladder:
                 by, bx = band.centroid
                 print(f"      Lane {lane_id}: band centroid at x={bx:.1f}, y={by:.1f}")
@@ -747,7 +787,7 @@ class DBSCANLaneAnalyzer:
 
 
                 if size_bp is not None and not np.isnan(size_bp):
-                    print(f"      Band {b_idx}: {migration_px:.1f}px, {int(round(size_bp))}bp")
+                    print(f"      Band {b_idx}: {migration_px:.1f}px, {int(round(size_bp))}bp/kDa")
                 else:
                     print(f"      Band {b_idx}: {migration_px:.1f}px, outside ladder range")
 
@@ -769,9 +809,11 @@ class DBSCANLaneAnalyzer:
 
     # Step 9
     def report(self, output_folder):
-        console("Step 9: Saving Report and Distances")
+        log("Step 9: Saving Report and Distances")
         # CSV
         df = pd.DataFrame(self.distances)
+        df['size_bp'] = df['size_bp'].fillna('Outside ladder range')
+        df = df.rename(columns={'size_bp': 'size_bp_kDa'})
         csv_path = os.path.join(output_folder, f"{self.gel_name}_distances.csv")
         df.to_csv(csv_path, index=False)
         print(f"\n   Saved distances: {csv_path}")
@@ -789,8 +831,6 @@ class DBSCANLaneAnalyzer:
         report_lines.append("Detection summary:")
         report_lines.append(f"  • Bands detected: {len(self.repaired_bands)}")
         report_lines.append(f"  • Lanes detected: {len(self.all_lane_axes)}")
-        report_lines.append(f"  • Complete lanes (with bands): {len([l for l in self.all_lane_axes.values() if l['bands']])}")
-        report_lines.append(f"  • Empty lanes (no bands): {len([l for l in self.all_lane_axes.values() if not l['bands']])}")
         report_lines.append("")
 
         # Ladder info (now supports one or more ladder lanes)
@@ -836,7 +876,7 @@ class DBSCANLaneAnalyzer:
                 size_bp = dist.get('size_bp')
 
                 if size_bp is not None and not np.isnan(size_bp):
-                    size_str = f", {int(round(size_bp))}bp"
+                    size_str = f", {int(round(size_bp))}bp/kDa"
                 else:
                     size_str = ", outside ladder range"
 
@@ -847,7 +887,7 @@ class DBSCANLaneAnalyzer:
         report_path = os.path.join(output_folder, f"{self.gel_name}_report.txt")
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write("\n".join(report_lines))
-        print(f"   Saved report: {report_path}")
+        log(f"   Saved report: {report_path}")
 
         return True
 
@@ -858,6 +898,8 @@ if __name__ == "__main__":
     parser.add_argument("--mask_pattern", default="*_raw_mask.tif", help="Pattern to match mask files (default: *_raw_mask.tif)")
     parser.add_argument("--non_interactive", action="store_true", help="Auto-select the ladder lane with the most bands and use --ladder_sizes with no prompts")
     parser.add_argument("--ladder_sizes", help='Comma-separated ladder sizes, required when --non_interactive is set (e.g. "1000,750,500,250")')
+    parser.add_argument("--no_area_filter", action="store_true", help="Disable small-band area filtering")
+    parser.add_argument("--no_confidence_filter", action="store_true", help="Disable confidence filtering")
     args = parser.parse_args()
 
     os.makedirs(args.output_folder, exist_ok=True)
@@ -902,17 +944,17 @@ if __name__ == "__main__":
             analyzer = DBSCANLaneAnalyzer(segmap_path, confidence_path=confidence_path)
             analyzer.extract_bands()
 
-            if not analyzer.filter_bands():
+            if not analyzer.filter_bands(apply_area_filter=not args.no_area_filter, apply_confidence_filter=not args.no_confidence_filter):
                 log_lines.append(f"Skipped: {gel_name} - no bands detected after filtering")
                 sys.stdout = sys.__stdout__
                 log_file.close()
-                console(f"   Skipped: {gel_name} - no bands detected after filtering")
+                log(f"   Skipped: {gel_name} - no bands detected after filtering")
                 continue
 
             analyzer.cluster_bands()
             analyzer.repair_split_bands()
             analyzer.estimate_lanes()
-            fig = analyzer.visualise(save_path=os.path.join(args.output_folder, f"{gel_name}_lanesnew.png"))
+            fig = analyzer.visualise(save_path=os.path.join(args.output_folder, f"{gel_name}_lanes.png"))
             calibrated = analyzer.calibrate(
                 ladder_sizes_bp=ladder_sizes_bp,
                 interactive=not args.non_interactive
@@ -924,7 +966,7 @@ if __name__ == "__main__":
                 log_lines.append(f"Skipped: {gel_name} - no usable ladder calibration")
                 sys.stdout = sys.__stdout__
                 log_file.close()
-                console(f"   Skipped: {gel_name} - no usable ladder calibration")
+                log(f"   Skipped: {gel_name} - no usable ladder calibration")
                 continue
 
             analyzer.measure()
@@ -956,7 +998,7 @@ if __name__ == "__main__":
         f.write("Details:\n")
         f.write("-" * 20 + "\n")
         for line in log_lines:
-            f.write(line + "\n")    
+            f.write(line + "\n")
 
     print(f"\nProcessed: {successful}/{len(mask_paths)} successfully")
     if failed > 0:

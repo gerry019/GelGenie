@@ -11,20 +11,14 @@ from matplotlib import patches # For drawing shapes
 import matplotlib
 import sys
 
-if 'COLAB_RELEASE_TAG' in os.environ:
-    matplotlib.use("Agg")
-else:
-    matplotlib.use("TkAgg")
+matplotlib.use("TkAgg")
 
 import matplotlib.pyplot as plt
 plt.ion()
 
 def console(msg=""):
     """Print directly to the real terminal, bypassing any stdout redirection."""
-    if 'COLAB_RELEASE_TAG' in os.environ:
-        print(msg, flush=True)
-    else:
-        print(msg, file=sys.__stdout__, flush=True)
+    print(msg, file=sys.__stdout__, flush=True)
 
 def log(msg=""):
     """Print to both the log file (stdout) and the real terminal."""
@@ -413,7 +407,7 @@ class WellCentricLaneAnalyzer:
         # How far along between the two rungs (0 = at mig_low, 1 = at mig_high)
         fraction = (m - mig_low) / (mig_high - mig_low)
 
-        # Interpolate in log space, then convert back to bp
+        # Interpolate in log space, then convert back to bp/kDa
         log_size_est = log_low + fraction * (log_high - log_low)
         return float(10 ** log_size_est)
 
@@ -487,7 +481,7 @@ class WellCentricLaneAnalyzer:
                         self.lane_to_ladder = {}
                         return False
 
-                    console(f"Enter {n} sizes in bp for Lane {ladder_id} (top to bottom): ")
+                    console(f"Enter {n} sizes in bp/kDa for Lane {ladder_id} (top to bottom): ")
                     raw = input().strip()
                     try:
                         candidate_sizes = np.array(
@@ -532,7 +526,7 @@ class WellCentricLaneAnalyzer:
 
             lane_to_ladder = {}
 
-            if len(ladder_calibrations) == 1:
+            if len(ladder_calibrations) == 1: # More prompts
                 only_lid = next(iter(ladder_calibrations))
                 for lid in self.extended_lanes:
                     lane_to_ladder[lid] = only_lid
@@ -572,7 +566,7 @@ class WellCentricLaneAnalyzer:
             return True
 
     def assign_band_sizes(self):
-        """Estimate the molecular weight (bp) of every band, using local two-point
+        """Estimate the molecular weight/size (bp/kDa) of every band, using local two-point
             log-linear interpolation between the two ladder rungs bracketing its
             migration distance, based on whichever ladder lane it was assigned to.
             Migration distance is measured as the Euclidean distance from the band's
@@ -600,7 +594,7 @@ class WellCentricLaneAnalyzer:
                 if bid in band_size_bp_by_id: # only get IDS of those non-ladder bands
                     continue
 
-                # Euclidean migration from this lane's well, then interpolate size 
+                # Euclidean migration from this lane's well, then interpolate size
                 x0_lane = float(lane['wells'][0].centroid[1])
                 m = float(np.sqrt((band.centroid[0] - y0_lane) ** 2 + (band.centroid[1] - x0_lane) ** 2))
                 size_est = self.interpolate_size_local(m, cal['migs_sorted'], cal['log_sizes_sorted'])
@@ -645,7 +639,7 @@ class WellCentricLaneAnalyzer:
                     euclidean_dist = float(np.sqrt((by - wy) ** 2 + (bx - wx) ** 2))  # migration we print
                     size_bp = self.band_size_bp_by_id.get(id(band))
                     if size_bp is not None and not np.isnan(size_bp):
-                        print(f"   Well {w_idx} → Band {b_idx}: {euclidean_dist:.1f}px, {int(round(size_bp))}bp")
+                        print(f"   Well {w_idx} → Band {b_idx}: {euclidean_dist:.1f}px, {int(round(size_bp))}bp/kDa")
                     else:
                         print(f"   Well {w_idx} → Band {b_idx}: {euclidean_dist:.1f}px")
 
@@ -747,7 +741,7 @@ class WellCentricLaneAnalyzer:
 
         # Fixes spacing between plots
         plt.tight_layout()
-    
+
         # Save visualization
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -755,10 +749,10 @@ class WellCentricLaneAnalyzer:
 
         fig.canvas.draw()
 
-        if 'COLAB_RELEASE_TAG' not in os.environ:
-            fig.canvas.flush_events()
-            plt.show(block=False)
-            plt.pause(0.5)
+
+        fig.canvas.flush_events()
+        plt.show(block=False)
+        plt.pause(0.5)
 
         return fig
 
@@ -768,7 +762,7 @@ class WellCentricLaneAnalyzer:
         log("Step 8: Saving Detailed Report")
         report_lines = []
         report_lines.append("="*80)
-        report_lines.append(" Well Centric Gel analysisT")
+        report_lines.append(" Well Centric Gel analysis")
         report_lines.append("="*80)
         report_lines.append(f"Analysis timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append(f"Segmentation file: {getattr(self, 'segmap_path', 'Unknown')}")
@@ -835,7 +829,7 @@ class WellCentricLaneAnalyzer:
                     size_bp = dist.get('size_bp')
 
                     if size_bp is not None and not np.isnan(size_bp):
-                        size_str = f", {int(round(size_bp))}bp"
+                        size_str = f", {int(round(size_bp))}bp/kDa"
                     else:
                         size_str = ""
 
@@ -890,7 +884,7 @@ def analyze_gel_with_proper_well_centric_approach(
 ):
     analyzer = WellCentricLaneAnalyzer(segmap_path, confidence_path=confidence_path, use_area_filter=use_area_filter, use_confidence_filter=use_confidence_filter)
     analyzer.segmap_path = segmap_path  # Store for reporting
-    
+
     try:
         if not analyzer.extract_wells_and_bands(): return None
         if not analyzer.cluster_wells_into_lane_groups(): return None
@@ -905,10 +899,6 @@ def analyze_gel_with_proper_well_centric_approach(
         fig = None
         if show_plot or save_plot_path:
             fig = analyzer.create_visualization(save_path=save_plot_path)
-
-            if 'COLAB_RELEASE_TAG' in os.environ and interactive and fig is not None:
-                from IPython.display import display
-                display(fig)
 
         calibrated = analyzer.calibrate(
             ladder_sizes_bp=ladder_sizes_bp,
@@ -928,8 +918,11 @@ def analyze_gel_with_proper_well_centric_approach(
         if not analyzer.calculate_distances_for_complete_lanes():
             return None
 
+        if save_report_path:
+            analyzer.save_detailed_report(save_report_path)
+
         return analyzer.generate_report()
-        
+
     except Exception as e:
         log(f"Error during analysis: {e}")
         import traceback; traceback.print_exc()
@@ -941,7 +934,7 @@ if __name__ == "__main__":
                         help='Folder containing mask files')
     parser.add_argument('--output_folder', required=True,
                         help='Output folder for analysis results')
-    parser.add_argument('--mask_pattern', default='*.tif',
+    parser.add_argument('--mask_pattern', default='*_raw_mask.tif',
                         help='Pattern to match mask files (default: *.tif)')
     parser.add_argument('--show_plots', action='store_true',
                         help='Show plots in addition to saving them')
@@ -986,8 +979,7 @@ if __name__ == "__main__":
     failed = 0
     log_lines = []
 
-    in_colab = 'COLAB_RELEASE_TAG' in os.environ
-    redirect_stdout = not (in_colab and not args.non_interactive)
+    redirect_stdout = True
 
     for i, mask_file in enumerate(mask_files, 1):
             image_name = os.path.splitext(os.path.basename(mask_file))[0]
@@ -1006,8 +998,11 @@ if __name__ == "__main__":
                 else:
                     log_file = None
 
+                confidence_file = mask_file.replace('_raw_mask.tif', '_confidence_map.tif')
+
                 results = analyze_gel_with_proper_well_centric_approach(
                     segmap_path=mask_file,
+                    confidence_path=confidence_file,
                     ladder_sizes_bp=ladder_sizes_bp,
                     renumber_lanes=True,
                     show_plot=args.show_plots,
@@ -1030,6 +1025,7 @@ if __name__ == "__main__":
                         df = pd.DataFrame(results['distances'])
                         df['image_name'] = image_name
                         df['size_bp'] = df['size_bp'].fillna('Outside ladder range')
+                        df = df.rename(columns={'size_bp': 'size_bp_kDa'})
                         df.to_csv(csv_path, index=False)
 
                     successful += 1
@@ -1069,4 +1065,4 @@ if __name__ == "__main__":
     print(f"Results saved to: {output_folder}")
     print(f"Log saved to: {log_path}")
     if failed > 0:
-        log(f" {failed} analyses failed - check log for details")     
+        log(f" {failed} analyses failed - check log for details")
