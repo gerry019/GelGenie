@@ -949,9 +949,9 @@ if __name__ == "__main__":
 
             if not analyzer.filter_bands(apply_area_filter=not args.no_area_filter, apply_confidence_filter=not args.no_confidence_filter):
                 log_lines.append(f"Skipped: {gel_name} - no bands detected after filtering")
+                log(f"   Skipped: {gel_name} - no bands detected after filtering")
                 sys.stdout = sys.__stdout__
                 log_file.close()
-                log(f"   Skipped: {gel_name} - no bands detected after filtering")
                 continue
 
             analyzer.cluster_bands()
@@ -967,9 +967,9 @@ if __name__ == "__main__":
 
             if not calibrated:
                 log_lines.append(f"Skipped: {gel_name} - no usable ladder calibration")
+                log(f"   Skipped: {gel_name} - no usable ladder calibration")
                 sys.stdout = sys.__stdout__
                 log_file.close()
-                log(f"   Skipped: {gel_name} - no usable ladder calibration")
                 continue
 
             analyzer.measure()
