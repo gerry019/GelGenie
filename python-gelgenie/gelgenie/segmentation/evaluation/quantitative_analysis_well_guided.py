@@ -10,6 +10,7 @@ from skimage.morphology import convex_hull_image
 from matplotlib import patches # For drawing shapes
 import matplotlib
 import sys
+import traceback
 
 matplotlib.use("TkAgg")
 
@@ -421,7 +422,7 @@ class WellCentricLaneAnalyzer:
 
             # Auto-select ladder: lane with most bands (and ask user to verify)
             auto_ladder_id = max(self.complete_lanes.keys(), key=lambda k: len(self.complete_lanes[k]['bands']))
-            print(f"\nAuto-selected ladder: Lane {auto_ladder_id}")
+            log(f"\nAuto-selected ladder: Lane {auto_ladder_id}")
 
             if not interactive:
                 if ladder_sizes_bp is None:
@@ -489,17 +490,17 @@ class WellCentricLaneAnalyzer:
                             dtype=float
                         )
                     except Exception:
-                        print("Could not parse sizes. Please try again.")
+                        log("Could not parse sizes. Please try again.")
                         continue
 
                     if len(candidate_sizes) != n:
-                        print(f"Provided {len(candidate_sizes)} sizes but {n} bands in Lane {ladder_id}. Please re-enter.")
+                        log(f"Provided {len(candidate_sizes)} sizes but {n} bands in Lane {ladder_id}. Please re-enter.")
                         continue
 
                     sizes = candidate_sizes
 
                 if not np.all(np.diff(sizes) < 0): # checks for negative difference
-                    print("Note: ladder sizes are not strictly decreasing top to bottom. Proceeding anyway.")
+                    log("Note: ladder sizes are not strictly decreasing top to bottom. Proceeding anyway.")
 
                 log_sizes = np.log10(sizes)
 
@@ -925,7 +926,7 @@ def analyze_gel_with_proper_well_centric_approach(
 
     except Exception as e:
         log(f"Error during analysis: {e}")
-        import traceback; traceback.print_exc()
+        log(traceback.format_exc())
         return None
 
 if __name__ == "__main__":
@@ -1042,6 +1043,7 @@ if __name__ == "__main__":
                     log_file.close()
                 failed += 1
                 log_lines.append(f"Failed: {image_name} - {str(e)}")
+                log_lines.append(traceback.format_exc())
                 console(f"   Failed: {image_name} - {str(e)}")
 
     # Write log file
@@ -1065,4 +1067,4 @@ if __name__ == "__main__":
     print(f"Results saved to: {output_folder}")
     print(f"Log saved to: {log_path}")
     if failed > 0:
-        log(f" {failed} analyses failed - check log for details")
+        console(f" {failed} analyses failed - check log for details")

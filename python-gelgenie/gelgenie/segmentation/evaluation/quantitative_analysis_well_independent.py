@@ -12,6 +12,7 @@ from skimage.morphology import convex_hull_image
 import matplotlib
 from matplotlib import patches
 import sys
+import traceback
 
 def console(msg=""):
     print(msg, file=sys.__stdout__, flush=True)
@@ -596,7 +597,7 @@ class DBSCANLaneAnalyzer:
         log(f"\n=== Step 7: Ladder Calibration (local two-point interpolation) ===")
         # Auto-select ladder: lane with most bands (and ask user to verify)
         auto_ladder_id = max(self.all_lane_axes.keys(), key=lambda k: len(self.all_lane_axes[k]['bands']))
-        print(f"\nAuto-selected ladder: Lane {auto_ladder_id}")
+        log(f"\nAuto-selected ladder: Lane {auto_ladder_id}")
 
         if not interactive: # Either the user supply the ladder sizes before or once prompted
             if ladder_sizes_bp is None:
@@ -686,7 +687,7 @@ class DBSCANLaneAnalyzer:
                 'known_sizes': {id(b): float(s) for b, s in zip(ladder_bands_sorted, sizes)},
             }
 
-            print(f"   Local two-point log-linear interpolation calibration complete for Ladder Lane {ladder_id}. Sizes attached for {n} ladder bands.")
+            log(f"   Local two-point log-linear interpolation calibration complete for Ladder Lane {ladder_id}. Sizes attached for {n} ladder bands.")
 
         if not ladder_calibrations: # More prompts
             log("No usable ladder calibration.")
@@ -936,6 +937,8 @@ if __name__ == "__main__":
 
         gel_log_path = os.path.join(args.output_folder, f"{gel_name}_run.log")
 
+        log_file = None
+
         try:
             confidence_path = confidence_path_by_segmap[segmap_path]
             log_file = open(gel_log_path, 'w', encoding='utf-8')
@@ -980,10 +983,12 @@ if __name__ == "__main__":
 
         except Exception as e:
             sys.stdout = sys.__stdout__
-            log_file.close()
+            if log_file is not None:
+              log_file.close()
             failed += 1
             log_lines.append(f"Failed: {gel_name} - {str(e)}")
             console(f"   Failed: {gel_name} - {str(e)}")
+            console(traceback.format_exc())
             continue
         print()  # blank line between gels for readability
 
@@ -1004,5 +1009,5 @@ if __name__ == "__main__":
     if failed > 0:
         print(f" {failed} gel(s) failed - see below")
         for line in log_lines:
-            if line.startswith("FAILED"):
+            if line.startswith("Failed"):
                 print(f"   {line}")
