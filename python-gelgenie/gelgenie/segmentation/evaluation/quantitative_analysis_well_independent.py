@@ -771,7 +771,7 @@ class DBSCANLaneAnalyzer:
             log("\n   Bands outside their assigned ladder range (no size assigned):")
             for lane_id, band in outside_ladder:
                 by, bx = band.centroid
-                print(f"      Lane {lane_id}: band centroid at x={bx:.1f}, y={by:.1f}")
+                log(f"      Lane {lane_id}: band centroid at x={bx:.1f}, y={by:.1f}")
 
         # Distances
         distances = []
