@@ -32,6 +32,22 @@ GelGenie can be opened directly from the QuPath interface by clicking on the Ext
 To run your first segmentation, follow these steps:
 - Load in an image (either directly or through a project).
 - Open the GelGenie interface.
+
+### Thesis Development Version
+
+The thesis development version provides `High Accuracy`, `Wide Detection` and `Custom` model-selection options. `High Accuracy` uses the existing `Universal Model`, while `Wide Detection` uses the existing `Sharp Band Model`; both are two-class models that detect bands only and are described further below. `Custom` allows another model to be selected from the available model collection.
+
+Two three-class models developed in this work are available under `Custom`: `3-Class Segmentation Model` and `3-Class Segmentation Model (Expanded)`. These segment the image into background, bands and wells, while the existing two-class models segment background and bands. When either three-class model is selected, the segmentation button displays `Detect bands and wells`; for two-class models, it displays `Detect bands`.
+
+The model download process remains the same as described below. The existing segmentation settings also provide the same functionality, although they are presented as buttons rather than checkboxes in the updated interface.
+
+<p align="center">
+  <img src="./screenshots/high_accuracy.png" alt="High Accuracy model selection" width="30%">
+  <img src="./screenshots/wide_detection.png" alt="Wide Detection model selection" width="30%">
+  <img src="./screenshots/custom_model.png" alt="Custom model selection" width="30%">
+</p>
+
+### Original GelGenie
 - Select a model and download it to your local PC by clicking on the download icon.
   - **The 'Universal Model' is recommended for general-purpose use.**  If results are unsatisfactory, especially with very sharp bands, **the 'Sharp Band Model' is a good alternative.**
   - You can get more info on each model by clicking on the info button next to the download icon.
@@ -52,7 +68,9 @@ To run your first segmentation, follow these steps:
   - **`Find bands in entire image`** - Selecting this will run segmentation on the entire image (default).
   - **`Find bands in selected region`** - Selecting this will run segmentation only within the selected annotation (more details on annotations [here](#band-segmentation-maps)).
   - **`Delete previous bands`** - Selecting this will delete all previous segmentation results before generating new ones.
-  - **`Light bands on dark background`** - Selecting this will assume that bands are lighter than the background (and vice-versa).  The extension will attempt to auto-assign the value of this checkbox but can sometimes make mistakes.  Make sure to fix this setting if it is incorrect for the current image.
+  - **`Light bands on dark background`** - Selecting this will assume that bands are lighter than the background (and vice-versa).
+  - **Thesis development version:** these options are toggle buttons labelled `Full image`, `Region`, `Reset bands` and `Dark bands`. `Reset bands` removes previous wells as well as bands, and `Dark bands` is selected when bands are darker than the background.
+The extension will attempt to auto-assign the value of this checkbox but can sometimes make mistakes.  Make sure to fix this setting if it is incorrect for the current image.
 - Once a model is downloaded, it is always available for use and an internet connection is no longer required.
 - **For advanced users:** The default normalization method for images before being presented to a model is to normalise all pixels to the range 0-1 and cutoff the 0.1% max/min outliers (this normalisation is only used for band segmentation and does not affect quantitation).  However, we have observed that normalizing by the actual datatype max value (e.g. 65535 for 16-bit images) can sometimes have a beneficial effect in 16-bit (or more) images. To use this setting, switch to the `Advanced` tab and toggle between the two checkboxes under `Model Runtime Settings`.  8-bit grayscale images are always normalized by 255, regardless of the values of these checkboxes.
 ### Direct CPU/GPU Inference (DJL Mode)
@@ -75,21 +93,31 @@ To run your first segmentation, follow these steps:
 <img src="./screenshots/example_seg.png" alt="Example segmentation result" width="600">
 </p>
 
+- **Thesis development version:** the same applies when using the three-class model (`3-Class Segmentation Model (Expanded)`, selected under `Custom`). The segmentation button reads `Detect bands and wells`, and both bands and wells are shown on the image as separate annotation classes. Bands are then automatically organised into lanes, with wells labelled `W1`, `W2`, etc., bands labelled according to their lane and vertical position (e.g. `L1-1`, `L1-2`), and a lane connector drawn for each lane, as shown below. Band handling, editing and quantification, and the other tabs, work as described in the following sections.
+
+<p align="center">
+<img src="./screenshots/three_class_segmentation.png" alt="Three-class segmentation and lane organisation" width="700">
+</p>
+
 - DJL will also allow to use a GPU if you have one available (including on Apple Silicon).  Simply update the 'Compute on Device' checkbox to select an available GPU. 
 - The first time the GPU is used, there will be a short delay.  Subsequent runs will be much faster.  On an Apple Silicon GPU, typical images are segmented almost instantaneously.
 - You should only run `nnUNet` models in GPU mode, as CPU mode will take a very long time (minutes).
 ### OpenCV CPU Inference
 - You may alternatively use OpenCV to run models (CPU only), which requires no additional setup.  However, this mode is significantly slower and results may be inconsistent.  This is as OpenCV v4.7+ does not allow dynamic inputs and so to run inference on a large image, it needs to be broken up into patches, run separately and then re-stitched together.  Hopefully when OpenCV fixes this issue, this limitation will be removed.
-- You may turn on OpenCV mode by switching to the `Advanced` tab and unchecking the `Use DJL for inference` checkbox.  After this, return to the `Band Search` tab and click on the `Identify Bands` button as before. 
+- You may turn on OpenCV mode by switching to the `Advanced` tab and unchecking the `Use DJL for inference` checkbox.  After this, return to the `Band Search` tab and click on the `Identify Bands` button as before.
+- - **Thesis development version:** the checkbox is labelled `Run models using DJL`, the main tab is `Identify`, and the segmentation button reads `Detect bands` or `Detect bands and wells`.
 ## Band Segmentation Maps
 
 When the selected model has completed the segmentation process, the extension will process its output and generate a single `annotation` for each individual band found.  Annotations are QuPath objects that can be selected, edited and manipulated using QuPath's normal editing tools.  Each annotation represents a single gel band.  When moving on to quantitation, a band's volume is measured by summing the intensity of all pixels within the annotation border.  While the segmentation models are highly accurate in most scenarios, there will be cases where adjusting the model's outputs is necessary.  The following subsections discuss different options for interacting with annotations.
+
+**Thesis development version:** when a three-class model is used, wells are also added as separate annotations. In addition, bands smaller than 0.0075% of the image area are kept as `Filtered Band` annotations rather than being deleted, so they remain available for inspection and manual correction.
 
 ### Changing Band Display
 
 Band colours and visualization options can both be adjusted directly from within GelGenie's `Visualize & Edit` section.  The options available are as follows:
 - In the `Band visuals` row, the three icons can be toggled to 1) show/hide bands, 2) fill in bands and 3) display/hide labels, respectively.
 - In the `Band editing` row, the three icons can be toggled to 1) turn on/off move mode, 2)  turn on/off brush mode and 3) turn on/off band select mode, respectively.  Band select mode allows you to select multiple bands at once by drawing an annotation shape around them (more info below).
+- **Thesis development version:** these display options apply to all annotations, so wells, lane connectors and `Filtered Band` annotations are shown, filled and labelled in the same way as bands.
 <p align="center">
 <img src="./screenshots/editing_options.png" alt="Band editing options" width="300">
 </p>
@@ -99,6 +127,8 @@ Band colours and visualization options can both be adjusted directly from within
 If a model's output segmentation map is incomplete or requires adjustment, changes can be made directly using QuPath's brush tool.  The brush tool can be selected from the main QuPath menu or from within GelGenie's `Visualize & Edit` section (see below).  After  selecting the brush tool, you can extend a band by clicking on its border and dragging the mouse.  If you hold down the `alt` button, the brush tool  becomes an eraser and clicking and dragging on a band will remove the selected regions.  To resize the brush, simply zoom in and out using the mouse wheel (or standard trackpad gestures).  The zoomed-out view in the top right can also be used to help re-position the image quickly.
 
 To exit `brush` mode, simply click on the four-way arrow icon (available in the QuPath menu or in GelGenie's `Visualize & Edit` section).  In this move mode, bands can also be selected and moved around directly.  
+
+**Thesis development version:** well annotations can be edited with the brush tool in the same way as bands.
 
 <p align="center">
 <img src="./screenshots/editing_annotations.gif" alt="Band editing example" width="800">
@@ -112,7 +142,10 @@ In other cases, you may wish to create bands entirely from scratch (e.g. when cr
 - Annotations created in this way will be default have a red border as they are considered unclassified by QuPath.  To register these annotations as gel bands, simply select the band of interest and then click on the `Register` button.  This should change the annotation's colour to gold (or whichever colour is set as the default band colour).
 - Annotations created in this way will have no name/label.  A band's label can be edited by clicking on the band of interest and then clicking on the `Relabel` button.  You can also press the enter key on your keyboard as a shortcut instead.
 - To speed-up the segmentation of a large amount of bands, the `Auto-Register` button will register all unclassified annotations as gel bands.  The `Auto-Label` button will automatically assign a label to all bands in the format LX-Y where X = lane number and Y = band number. It will assign lanes/bands from the top left of the image and progress to the far right corner of the image. If your image is not vertically oriented, you will need to rotate it to a vertical orientation for this to work properly (at least in the current implementation).
-- The top-left QuPath menu contains various other options for creating different types of annotations, including rectangles, circles and lines.  These can be helpful in certain cases (e.g. defining a background patch or in select mode). 
+- The top-left QuPath menu contains various other options for creating different types of annotations, including rectangles, circles and lines.  These can be helpful in certain cases (e.g. defining a background patch or in select mode).
+- **Thesis development version:** `Auto-Label` organises bands into lanes rather than labelling them from the top left of the image. When wells are present, they are used to guide lane formation; otherwise, lanes are formed from the band positions alone. Wells are labelled `W1`, `W2` and so forth, bands are labelled by lane and position (e.g. `L1-1`, `L1-2`, `L2-1`), and a lane connector is drawn for each lane.
+- **Thesis development version:** a `Repair Split` button is also available. After `Auto-Label`, it merges horizontally split fragments of a band within each lane.
+- **Thesis development version:** wells can be added manually by drawing an annotation and setting its class to `Well` through the `Relabel` dialog (`Register` only assigns the band class).
 
 Info buttons are also provided for the band creation and editing tools, which explain the band creation process directly within the app.
 <p align="center">
@@ -127,6 +160,8 @@ In the simplest case, band measurements can be made by simply calculating the ra
 To restrict which bands are included in the data table, select the bands of interest in the image (hold down the ctrl or cmd button to select multiple bands or use the select mode) and then activate the `Generate data for selected bands only` checkbox before generating the data table.
 
 In the standard `Band Search` tab, the bottom `Selected Band Pixel Distribution` section contains a live histogram that shows the pixel intensity distribution of the selected band(s).  This can be useful for quickly comparing the intensities of two bands.  You can adjust how many bands show up at once in this display through the settings in the `Advanced` tab.
+
+**Thesis development version:** lane connectors and `Filtered Band` annotations are not included in the data table.
 <p align="center">
 <img src="./screenshots/generating_raw_quantitation.gif" alt="Data table generation example" width="800">
 </p>
@@ -141,6 +176,7 @@ The results table generated contains various display features:
 - The entire data table can be exported using the `Export Data` button.  The data will be collated into a single csv file and exported to the location of your choice.  The csv file will contain all the columns visible in the data table.
 - Multiple data table windows can be created, if desired.
 - The segmentation map can be exported as-is with no underlying gel data by clicking on the 'Export Gel Band Map' button.  The image file generated can be used directly for model training, if desired.
+- **Thesis development version:** the exported segmentation map also includes wells, labelled as a separate class (background = 0, bands = 1, wells = 2).
 <p align="center">
 <img src="./screenshots/adjusting_data_table.gif" alt="Data table adjustment example" width="800">
 </p>
@@ -177,8 +213,10 @@ The full list of currently available GelGenie-specific scriptable commands and t
   - BOOL-2: Set to `true` to invert image before running model.
   - BOOL-3: Set to `true` to normalize non-standard 8-bit images using the datatype maximum (e.g. 65535 for 16-bit images).  Set to false to normalize by the maximum pixel value in the current image instead (this also applies percentile cutoffs and shifts data to the range 0-1).
 - `qupath.ext.gelgenie.tools.BandSorter.LabelBands()`
-  - Automatically labels all bands in the image using the ladder-band scheme described above. 
-- `qupath.ext.gelgenie.ui.TableController.computeAndExportBandData(BOOL-1,BOOL-2,BOOL-3,NORM_TYPE,INT-1,INT-2,BOOL-4,OUTPUT_FOLDER,OUTPUT_FILENAME)`
+  - Automatically labels all bands in the image using the ladder-band scheme described above.
+  - **Thesis development version:** organises bands into lanes (using wells when present) and labels wells and bands as described above.
+  - `qupath.ext.gelgenie.tools.BandSorter.RepairSplitBands()` *(thesis development version)*
+  - Merges horizontally split fragments of a band within each lane. Should be run after `LabelBands()`.`qupath.ext.gelgenie.ui.TableController.computeAndExportBandData(BOOL-1,BOOL-2,BOOL-3,NORM_TYPE,INT-1,INT-2,BOOL-4,OUTPUT_FOLDER,OUTPUT_FILENAME)`
   - Computes band volume measurement for the selected image and exports it to a csv file. 
   - BOOL-1: Set to `true` to enable global background calculation (requires the background patch to be pre-defined).
   - BOOL-2: Set to `true` to enable local background calculation.
@@ -201,6 +239,8 @@ The extension version you currently have installed can be verified from the Exte
 
 To update the extension, simply click on the update button to automatically download the latest release and have it installed.  Make sure to restart QuPath after the update.
 
+**Thesis development version:** do not use the update button, as it will replace the thesis version with the latest original GelGenie release. Updated thesis versions should be installed manually from the [project fork releases](https://github.com/gerry019/GelGenie/releases).
+
 To delete the extension, the same extension manager also has a delete button you can use to clear out the extension from your QuPath installation.  To completely delete all models downloaded by GelGenie, you should also click on the `Open extension directory` button and delete the `gelgenie` folder.
 
 <p align="center">
@@ -216,4 +256,13 @@ If interested in adding new features to the extension, the best way to have dire
 - Finally, don't forget to add the `include-extra` file in the QuPath repository to enable the extension.
 - If everything has been setup correctly, you should be able to build QuPath from scratch, with the extension included within it.  You can also use IntelliJ's debug feature to investigate issues and help with development.  
 - Keep in mind that QuPath is constantly evolving, and the latest commit on GitHub might contain features not available in the current release.
+- **Thesis development version:** this version was developed and tested with QuPath v0.7.0. After cloning QuPath, check out that release with `git checkout tags/v0.7.0 -b v0.7.0`. The `include-extra` file in the QuPath repository should contain:
+
+```
+  [includeBuild]
+  ../qupath-gelgenie
+
+  [dependencies]
+  io.github.mattaq31:qupath-gelgenie
+```
 
