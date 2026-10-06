@@ -256,7 +256,7 @@ If interested in adding new features to the extension, the best way to have dire
 - Finally, don't forget to add the `include-extra` file in the QuPath repository to enable the extension.
 - If everything has been setup correctly, you should be able to build QuPath from scratch, with the extension included within it.  You can also use IntelliJ's debug feature to investigate issues and help with development.  
 - Keep in mind that QuPath is constantly evolving, and the latest commit on GitHub might contain features not available in the current release.
-- **Thesis development version:** this version was developed and tested with QuPath v0.7.0. After cloning QuPath, check out that release with `git checkout tags/v0.7.0 -b v0.7.0`. The `include-extra` file in the QuPath repository should contain:
+- **Thesis development version:** clone the [project fork](https://github.com/gerry019/GelGenie) instead of the original GelGenie repository. This version was developed and tested with QuPath v0.7.0, so after cloning QuPath, check out that release with `git checkout tags/v0.7.0 -b v0.7.0`. The `include-extra` file in the QuPath repository should contain:
 
 ```
   [includeBuild]
@@ -264,5 +264,6 @@ If interested in adding new features to the extension, the best way to have dire
 
   [dependencies]
   io.github.mattaq31:qupath-gelgenie
+```
 ```
 
