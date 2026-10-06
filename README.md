@@ -15,13 +15,21 @@
 </div>
 
 ---
+### Thesis Development Version
+
+This repository is a temporary development fork of GelGenie created to accompany my MSc Bioinformatics dissertation (University of Malta). It extends the functionality of the original GelGenie, and these extensions are described in the relevant sections below.
+
+---
 Main code repository for GelGenie, an app that uses deep learning models to segment gel electrophoresis images and completely automate the gel analysis process.  The repo is split into two:
-- `python-gelgenie` contains a python package for preparing gel image datasets, creating segmentation architectures and training/evaluating deep learning models with PyTorch.  More details on usage and installation in the python package [README](./python-gelgenie/README.md).
-- `qupath-gelgenie` contains a QuPath extension that provides an easy-to-access interface for GelGenie models as well as a rich set of tools for analysing and exporting segmentation results.
+- `python-gelgenie` contains a python package for preparing gel image datasets, creating segmentation architectures and training/evaluating deep learning models with PyTorch.  It also contains the post-segmentation analysis pipelines developed as part of this thesis. More details on usage and installation in the python package [README](./python-gelgenie/README.md).
+- `qupath-gelgenie` contains a QuPath extension that provides an easy-to-access interface for GelGenie models as well as a rich set of tools for analysing and exporting segmentation results. The thesis development version additionally supports well segmentation and automated lane organisation.
 
 GelGenie Feature Highlights:
 - One-click segmentation of gel electrophoresis images
 - General-purpose models that work with a wide range of gel conditions, imagers and stains
+- Three-class segmentation of gel images into background, bands and wells *(thesis version)*
+- Automated lane organisation for gels with and without visible wells *(thesis version)*
+- Command-line post-segmentation analysis for migration-distance measurement and molecular size or mass estimation *(thesis version)*
 - Customisable band measurement, bar chart generation and normalisation
 - Easy export to csv for further processing
 - Scriptable interface for model inference and labelling
@@ -34,10 +42,25 @@ GelGenie Feature Highlights:
   <img src="./qupath-gelgenie/screenshots/s2.png" alt="GelGenie Screenshot 2" style="width: 47%; margin: 0.5%;">
   <img src="./qupath-gelgenie/screenshots/s3.png" alt="GelGenie Screenshot 3" style="width: 47%; margin: 0.5%;">
   <img src="./qupath-gelgenie/screenshots/s4.png" alt="GelGenie Screenshot 4" style="width: 47%; margin: 0.5%;">
+  <img src="./qupath-gelgenie/screenshots/thesis_version.png" alt="GelGenie thesis version showing well segmentation and automated lane organisation" style="width: 60%; margin: 0.5%;">	
 </div>
 
 ## Installing the QuPath GelGenie Extension
 
+### Thesis version
+
+### Thesis version
+
+- First, install QuPath 0.7.0, following the instructions for your operating system [here](https://qupath.github.io/).
+- Next, download `qupath-extension-gelgenie-thesis-v1.0.jar` from the [thesis-v1.0 pre-release](https://github.com/gerry019/GelGenie/releases/tag/thesis-v1.0) (make sure to only download the .jar file):
+
+<p align="center">
+<img src="./qupath-gelgenie/screenshots/thesis_release_download.png" alt="GelGenie thesis pre-release download" width="500">
+</p>
+
+- Then install and run it using the same drag & drop and extensions menu steps shown below.
+  
+### Original GelGenie release
 - First, install the latest version of QuPath (current v0.6.x), following the instructions for your operating system [here](https://qupath.readthedocs.io/en/0.6/).  
 - Next, download the latest version of the GelGenie extension from the [releases](https://github.com/mattaq31/GelGenie/releases) page (make sure to only download the .jar file):
 
@@ -70,9 +93,12 @@ GelGenie Feature Highlights:
 ##  GelGenie's Python Environment and Training New Models (for developers)
 
 Full documentation, Python installation instructions and more details are provided here [Python Quick Start](./python-gelgenie/README.md).
+
 ##  Acessing Pre-Trained Models (for developers)
 
 All pre-trained models are available on HuggingFace.  The main registry can be found at the link [here](https://huggingface.co/datasets/mattaq/GelGenie-Model-Zoo/blob/main/registry.json).  The QuPath GelGenie extension directly downloads the models from HuggingFace, with no user tweaking required.
+
+The three-class models developed as part of the thesis version are also available through the model registry and support segmentation of background, bands and wells.
 
 ## Accessing Labelled Gel Datasets 
 
