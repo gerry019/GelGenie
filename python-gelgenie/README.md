@@ -65,7 +65,7 @@ The main class (`TrainingHandler`) that takes care of training is located at `tr
 - The `wandb` tracking/visualization system is setup to allow for real-time tracking (if enabled).  You will need to create your own account and setup the API key to use this system.  TODO: currently the settings are hard-coded for the Dunn group account.  Will need to make this user-adjustable.
 - Once everything is ready, the training loop is started, which consists of iterating over the training and validation sets, calculating the loss and backpropagating the gradients.  Model checkpoints are saved throughout training, according to the settings supplied.  Automatic cleaning of old checkpoints is also possible (see the `model_cleanup_frequency` parameter for details).
 - **Thesis development version:** the `wandb` project and entity are set to the account used for this work. Either set `wandb_track` to `false`, or update the project and entity names in `core_training.py`. Training was tested with `wandb` v0.26.1; if compatibility issues occur with a newer version, install the tested version using `pip install wandb==0.26.1`.
-- 
+  
 Full usage of the training system can be evaluated from the `routine_training.py` script.  The training loop can also be run from the CLI using the `gelseg_train` command (see below).
 
 ## Evaluating a Model
