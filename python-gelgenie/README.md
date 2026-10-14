@@ -68,6 +68,21 @@ The main class (`TrainingHandler`) that takes care of training is located at `tr
   
 Full usage of the training system can be evaluated from the `routine_training.py` script.  The training loop can also be run from the CLI using the `gelseg_train` command (see below).
 
+### Resuming Training and Transfer Learning (Thesis Development Version)
+
+**Resuming a run:** use the same config file with `load_checkpoint` in the `[training]` section set to the epoch number of a checkpoint in the run's `checkpoints` folder. The experiment name and output directory must match the original run, and `epochs` should be the final epoch at which training stops. The model, optimizer and scheduler states are restored. Set `reset_optimizer = true` to skip loading the optimizer state (required when changing optimizer type). If `lr` or the scheduler `restart_period` in the config differ from the checkpoint, the new values are applied; this was used for the hyperparameter sweep.
+
+**Transfer learning from a two-class GelGenie checkpoint:** the original checkpoints have two output classes, so they must first be converted using the scripts in `gelgenie/segmentation/checkpoint_handling` (SMP U-Net only):
+
+1. Download a two-class checkpoint (`.pth`) from Hugging Face: [GelGenie-Universal-Dec-2023](https://huggingface.co/mattaq/GelGenie-Universal-Dec-2023) (epoch 579) or [GelGenie-Universal-FineTune-May-2024](https://huggingface.co/mattaq/GelGenie-Universal-FineTune-May-2024) (epoch 600).
+2. Optionally, set `checkpoint_path` in `checkpoint_inspection.py` and run it to list which layers will be transferred and which will be randomly initialised. Nothing is saved.
+3. In `checkpoint_conversion.py`, set `checkpoint_path`, `save_path` and `epoch`. Name the output `checkpoint_epoch_<epoch>.pth`, e.g. `checkpoint_epoch_579.pth`.
+4. Run `python checkpoint_conversion.py`. All layers with matching names and shapes are transferred; the final segmentation layer is randomly initialised, and new optimizer and scheduler states are created.
+5. Place the converted file in `<base_dir>/<experiment_name>/checkpoints`.
+6. In the config, set `classes = 3`, `load_checkpoint` to the epoch number, `restart_wandb = true`, and `epochs` to the final epoch. Then run `gelseg_train --parameter_config path/to/config.toml`.
+
+Training then proceeds as when resuming a run (see above), so a different `lr` or `restart_period` can be set in the config, as was done for the hyperparameter sweep.
+
 ## Evaluating a Model
 During training, the model will be tested on the validation set several times.  However, to run ad-hoc inference on a pre-trained model you can use the evaluation functions directly in a separate script (or the CLI function - see below).  An example of how to use these functions is as follows:
 
