@@ -17,7 +17,7 @@
 ---
 ### Thesis Development Version
 
-This repository is a temporary development fork of GelGenie created to accompany my MSc Bioinformatics dissertation (University of Malta). It extends the functionality of the original GelGenie, and these extensions are described in the relevant sections below.
+This repository is a temporary development fork of GelGenie created to accompany my MSc Bioinformatics dissertation (University of Malta). It extends the functionality of the original GelGenie, and these extensions are described in the relevant sections below. The three-class dataset used in this work is available on Zenodo: https://doi.org/10.5281/zenodo.23695284
 
 ---
 Main code repository for GelGenie, an app that uses deep learning models to segment gel electrophoresis images and completely automate the gel analysis process.  The repo is split into two:
@@ -27,7 +27,7 @@ Main code repository for GelGenie, an app that uses deep learning models to segm
 GelGenie Feature Highlights:
 - One-click segmentation of gel electrophoresis images
 - General-purpose models that work with a wide range of gel conditions, imagers and stains
-- Three-class segmentation of gel images into background, bands and wells *(thesis version)*
+- - Three-class (background, bands and wells) annotated dataset, available on [Zenodo](https://doi.org/10.5281/zenodo.23695284) *(thesis version)*
 - Automated lane organisation for gels with and without visible wells *(thesis version)*
 - Command-line post-segmentation analysis for migration-distance measurement and molecular size or mass estimation *(thesis version)*
 - Customisable band measurement, bar chart generation and normalisation
