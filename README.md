@@ -98,7 +98,7 @@ Full documentation, Python installation instructions and more details are provid
 
 All pre-trained models are available on HuggingFace.  The main registry can be found at the link [here](https://huggingface.co/datasets/mattaq/GelGenie-Model-Zoo/blob/main/registry.json).  The QuPath GelGenie extension directly downloads the models from HuggingFace, with no user tweaking required.
 
-The three-class models developed as part of the thesis version are also available through the model registry and support segmentation of background, bands and wells.
+The three-class models developed as part of the thesis version are also available through the model registry and support segmentation of background, bands and wells. The models can also be accessed directly on [Hugging Face](https://huggingface.co/Gertrude01/3Class-Gel-Segmentation-Expanded-Aug-2026).
 
 ## Accessing Labelled Gel Datasets 
 
